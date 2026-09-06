@@ -1,0 +1,26 @@
+<div class="jhs-item-menu" style="padding: 1em;">
+  <p style="margin: 0 0 1em 0; text-align: center;"><strong>Drag any item onto a character sheet:</strong></p>
+  <div style="display: flex; gap: 1em; justify-content: center; flex-wrap: wrap;">
+    {{#each variants}}
+      <div style="flex: 1 1 160px; min-width: 140px; text-align: center;">
+        {{#if this.exists}}
+          <div class="jhs-item-drag" draggable="true" data-uuid="{{this.itemUuid}}" data-drag-type="Item"
+               style="display: inline-block; cursor: grab; text-decoration: none; color: inherit;
+                      -webkit-user-drag: element; user-select: none;">
+            <img src="{{this.iconPath}}" alt="{{this.itemName}}" draggable="false"
+                 style="width: 96px; height: 96px; border: 2px solid #dc2626; border-radius: 10px;
+                        background: #0a0a0f; pointer-events: none;"/>
+            <div style="margin-top: 0.5em; font-weight: 700; pointer-events: none;">{{this.itemName}}</div>
+          </div>
+        {{else}}
+          <div style="opacity: 0.5; font-size: 0.9em;">
+            <em>{{this.itemName}}</em><br/>not yet created
+          </div>
+        {{/if}}
+      </div>
+    {{/each}}
+  </div>
+  <p style="margin: 1em 0 0 0; font-size: 0.9em; opacity: 0.75; text-align: center;">
+    Using the feat from the sheet triggers Apply Help on the current target.
+  </p>
+</div>
