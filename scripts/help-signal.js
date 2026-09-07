@@ -1,10 +1,12 @@
 const MODULE_ID   = "joetastic-help-signal";
 const SOCKET      = `module.${MODULE_ID}`;
 
-// Cues that get baked into the effect and travel via socket. The apply
-// cue is played immediately/locally from the macro on the instigator's
-// client, so it isn't included here.
+// All configurable cue settings. Cues get baked into the effect (for
+// trigger/expire) AND ride along on the apply-cue socket broadcast so
+// every client plays the instigator's chosen sound locally on their own
+// machine (scaled by each client's own volume slider).
 const CUE_KEYS = [
+  "applySound", "applyAnimation",
   "attackSound", "reminderSound", "attackAnimation",
   "expireSound", "expireAnimation"
 ];
@@ -179,7 +181,7 @@ async function requestApply(uuids, requesterName, variantKey = DEFAULT_VARIANT_K
 
   if (game.user.isGM) {
     await applyToActorUuids(uuids, variant.key, instigatorUuid, cues);
-    ui.notifications.info(`Applied "${variant.effectName}" to ${uuids.length} target(s).`);
+    // ui.notifications.info(`Applied "${variant.effectName}" to ${uuids.length} target(s).`); // debug only
     return;
   }
 
@@ -196,7 +198,7 @@ async function requestApply(uuids, requesterName, variantKey = DEFAULT_VARIANT_K
     instigatorUuid,
     cues
   });
-  ui.notifications.info(`Requested ${variant.effectName} for ${uuids.length} target(s).`);
+  // ui.notifications.info(`Requested ${variant.effectName} for ${uuids.length} target(s).`); // debug only
 }
 
 function applyToCurrentTargets(variantKey = DEFAULT_VARIANT_KEY, explicitInstigator = null) {
@@ -225,37 +227,47 @@ function applyToCurrentTargets(variantKey = DEFAULT_VARIANT_KEY, explicitInstiga
     return;
   }
 
-  // Play the apply cue once, broadcast to everyone, before the socket round-trip.
-  // One sound total; animation plays on each target token so multiple applies
-  // in the same click all get a visual, but only a single sound plays.
-  playApplyCueGlobal(targets);
+  // Play the apply cue: locally for this user, plus a socket broadcast so
+  // every OTHER client plays it locally on their own machine (at their own
+  // volume). One sound per client; animation plays on each target token.
+  const cues = getLocalCueConfig();
+  const tokenUuids = targets.map(t => t.document?.uuid).filter(Boolean);
+  game.socket.emit(SOCKET, { action: "applyCue", tokenUuids, cues });
+  playApplyCueLocal(targets, cues);
 
-  return requestApply(uuids, game.user.name, variant.key, instigatorActor?.uuid ?? null, getLocalCueConfig());
+  return requestApply(uuids, game.user.name, variant.key, instigatorActor?.uuid ?? null, cues);
 }
 
-// Broadcasts the apply sound + animation from THIS client. Called from the
-// macro entry point, once per macro click regardless of target count.
-function playApplyCueGlobal(tokens) {
+// Play the apply cue on THIS client only. Sound is restricted via .forUsers
+// so Sequencer doesn't rebroadcast; each client's own volume slider scales it.
+function playApplyCueLocal(tokens, cues = null) {
   if (typeof Sequence === "undefined") return;
-  const rawSound = game.settings.get(MODULE_ID, "applySound");
-  const rawAnim  = game.settings.get(MODULE_ID, "applyAnimation");
+  const rawSound = cues?.applySound     ?? game.settings.get(MODULE_ID, "applySound");
+  const rawAnim  = cues?.applyAnimation ?? game.settings.get(MODULE_ID, "applyAnimation");
   const soundPath = resolveDbPath(rawSound);
   const animPath  = rawAnim;
+  const volume    = getVolume();
 
   const seq = new Sequence();
   let hasContent = false;
   if (soundPath) {
-    seq.sound().file(soundPath).volume(0.8);
+    seq.sound().file(soundPath).volume(volume).forUsers([game.user.id]);
     hasContent = true;
   }
   if (animPath) {
     for (const token of tokens) {
       if (!token) continue;
-      seq.effect().file(animPath).atLocation(token).scaleToObject(1.5);
+      seq.effect().file(animPath).atLocation(token).scaleToObject(1.5).forUsers([game.user.id]);
       hasContent = true;
     }
   }
   if (hasContent) seq.play();
+}
+
+function getVolume() {
+  const v = Number(game.settings.get(MODULE_ID, "volume"));
+  if (!Number.isFinite(v)) return 0.8;
+  return Math.max(0, Math.min(1, v));
 }
 
 // Resolve a Sequencer DB path (possibly folder-level) to a concrete file path.
@@ -313,13 +325,13 @@ function playCue(kind, token, options = {}) {
   const soundPath = resolveDbPath(rawSound);
   const animPath  = rawAnim;
 
-  console.log(`${MODULE_ID} | cue "${kind}" broadcast=${broadcasting} → sound="${rawSound}" → resolved="${soundPath}" | anim="${animPath}"`);
+  const volume = getVolume();
 
   if (typeof Sequence !== "undefined") {
     const seq = new Sequence();
     let hasContent = false;
     if (soundPath) {
-      const s = seq.sound().file(soundPath).volume(0.8);
+      const s = seq.sound().file(soundPath).volume(volume);
       if (!broadcasting) s.forUsers([game.user.id]);
       hasContent = true;
     }
@@ -334,7 +346,7 @@ function playCue(kind, token, options = {}) {
 
   if (soundPath) {
     foundry.audio.AudioHelper.play(
-      { src: soundPath, volume: 0.8, autoplay: true, loop: false },
+      { src: soundPath, volume, autoplay: true, loop: false },
       broadcasting
     );
   }
@@ -354,11 +366,52 @@ const HARDCODED_SOUND_ENTRIES = {
     slide3: `modules/${MODULE_ID}/Sounds/Slides/Slide3.mp3`
   },
   guitaropenings: {
-    areyougonnabemygirl: `modules/${MODULE_ID}/Sounds/GuitarOpenings/areyougonnabemygirl.mp3`,
-    boomboom:            `modules/${MODULE_ID}/Sounds/GuitarOpenings/boomboom.mp3`,
-    sevennationarmy:     `modules/${MODULE_ID}/Sounds/GuitarOpenings/sevennationarmy.mp3`,
-    snow:                `modules/${MODULE_ID}/Sounds/GuitarOpenings/snow.mp3`,
-    walktheline:         `modules/${MODULE_ID}/Sounds/GuitarOpenings/WalkTheLine.mp3`
+    areyougonnabemygirl:  `modules/${MODULE_ID}/Sounds/GuitarOpenings/areyougonnabemygirl.mp3`,
+    baracudamaybe:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/baracudamaybe.mp3`,
+    blueoystercult:       `modules/${MODULE_ID}/Sounds/GuitarOpenings/Blueoystercult.mp3`,
+    boomboom:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/boomboom.mp3`,
+    browneyedgirl:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/brownEyedGirl.mp3`,
+    comearound:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/Comearound.mp3`,
+    eyeofthetiger:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/EyeOfTheTiger.mp3`,
+    freakout:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/freakout.mp3`,
+    gotmenow:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/GotMeNow.mp3`,
+    kidsarealright:       `modules/${MODULE_ID}/Sounds/GuitarOpenings/Kidsarealright.mp3`,
+    lastresort:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/LastResort.mp3`,
+    messageinabottle:     `modules/${MODULE_ID}/Sounds/GuitarOpenings/MessageInABottle.mp3`,
+    metalica:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/metalica.mp3`,
+    novemberrain:         `modules/${MODULE_ID}/Sounds/GuitarOpenings/novemberrain.mp3`,
+    part1:                `modules/${MODULE_ID}/Sounds/GuitarOpenings/part1.mp3`,
+    part2:                `modules/${MODULE_ID}/Sounds/GuitarOpenings/part2.mp3`,
+    part3:                `modules/${MODULE_ID}/Sounds/GuitarOpenings/Part3.mp3`,
+    pearljam:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/pearljam.mp3`,
+    prettywoman:          `modules/${MODULE_ID}/Sounds/GuitarOpenings/prettywoman.mp3`,
+    purplehaze:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/purplehaze.mp3`,
+    satisfaction:         `modules/${MODULE_ID}/Sounds/GuitarOpenings/Satisfaction.mp3`,
+    sevennationarmy:      `modules/${MODULE_ID}/Sounds/GuitarOpenings/sevennationarmy.mp3`,
+    smokeonthewater:      `modules/${MODULE_ID}/Sounds/GuitarOpenings/smokeonthewater.mp3`,
+    snow:                 `modules/${MODULE_ID}/Sounds/GuitarOpenings/snow.mp3`,
+    somein:               `modules/${MODULE_ID}/Sounds/GuitarOpenings/somein.mp3`,
+    someinnewer:          `modules/${MODULE_ID}/Sounds/GuitarOpenings/someinnewer.mp3`,
+    someriff:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/someriff.mp3`,
+    someriffagain:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/someriffagain.mp3`,
+    somesong:             `modules/${MODULE_ID}/Sounds/GuitarOpenings/somesong.mp3`,
+    somethingelse:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/Somethingelse.mp3`,
+    somethingish:         `modules/${MODULE_ID}/Sounds/GuitarOpenings/somethingish.mp3`,
+    somethingjesus:       `modules/${MODULE_ID}/Sounds/GuitarOpenings/Somethingjesus.mp3`,
+    somethingorother:     `modules/${MODULE_ID}/Sounds/GuitarOpenings/SomethingorOther.mp3`,
+    sominagain:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/sominagain.mp3`,
+    song2:                `modules/${MODULE_ID}/Sounds/GuitarOpenings/song2.mp3`,
+    sweethomealabama:     `modules/${MODULE_ID}/Sounds/GuitarOpenings/sweethomealabama.mp3`,
+    teenspirit:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/Teenspirit.mp3`,
+    thatonecarchasesong:  `modules/${MODULE_ID}/Sounds/GuitarOpenings/Thatonecarchasesong.mp3`,
+    thatonecarchasesong2: `modules/${MODULE_ID}/Sounds/GuitarOpenings/Thatonecarchasesong2.mp3`,
+    thereisahouse:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/thereIsAhouse.mp3`,
+    thunderstruck:        `modules/${MODULE_ID}/Sounds/GuitarOpenings/Thunderstruck.mp3`,
+    walktheline:          `modules/${MODULE_ID}/Sounds/GuitarOpenings/WalkTheLine.mp3`,
+    walkthisway:          `modules/${MODULE_ID}/Sounds/GuitarOpenings/WalkthisWay.mp3`,
+    wildthing:            `modules/${MODULE_ID}/Sounds/GuitarOpenings/Wildthing.mp3`,
+    wildthing2:           `modules/${MODULE_ID}/Sounds/GuitarOpenings/Wildthing2.mp3`,
+    wildthingslide:       `modules/${MODULE_ID}/Sounds/GuitarOpenings/Wildthingslide.mp3`
   },
   billandted: {
     billandted1: `modules/${MODULE_ID}/Sounds/BillandTed/billandted1.mp3`,
@@ -438,7 +491,6 @@ async function registerSounds() {
   // Enrichment: pull anything else the FilePicker can find beyond the hardcoded list.
   const scanned = await scanSoundsFolder();
   if (scanned.length > 0) {
-    console.log(`${MODULE_ID} | Sounds/ scan enrichment found ${scanned.length} file(s):`, scanned);
     const base = `modules/${MODULE_ID}/Sounds/`;
     for (const file of scanned) {
       const decoded = decodeURIComponent(file);
@@ -455,13 +507,10 @@ async function registerSounds() {
       }
       if (!target[name]) target[name] = file;
     }
-  } else {
-    console.log(`${MODULE_ID} | scan enrichment returned 0 (FilePicker restricted); using hardcoded entries only.`);
   }
 
   try {
     Sequencer.Database.registerEntries(MODULE_ID, entries);
-    console.log(`${MODULE_ID} | registered sound entries with Sequencer under "${MODULE_ID}.*"`, entries);
   } catch (e) {
     console.warn(`${MODULE_ID} | Sequencer.Database.registerEntries failed:`, e);
   }
@@ -479,7 +528,6 @@ async function registerSounds() {
   if (preloadPaths.length && Sequencer.Preloader) {
     try {
       await Sequencer.Preloader.preload(preloadPaths);
-      console.log(`${MODULE_ID} | preloaded ${preloadPaths.length} apply-cue default file(s)`);
     } catch (e) {
       console.warn(`${MODULE_ID} | apply-cue preload failed:`, e);
     }
@@ -490,8 +538,30 @@ async function registerSounds() {
 // updated in place so name/icon/command changes flow through on reload.
 async function ensureMacro(variant) {
   if (!game.user.isGM) return null;
-  const expectedCommand =
+
+  // Help-Attack gets an extra preamble so a hotbar click "just works" from a
+  // hover: if the player hasn't got one of their own tokens selected, pick
+  // one for them (prefer a PC over a companion/summon); if a token is under
+  // the cursor, target it. Save/Ability keep the plain call — those flows
+  // are player-driven enough that auto-selection hurts more than it helps.
+  const applyCall =
     `game.modules.get("${MODULE_ID}").api.applyToCurrentTargets(${JSON.stringify(variant.key)});`;
+  const expectedCommand = variant.key === "attack"
+    ? `if (!game.user.isGM && !canvas.tokens.controlled.some(t => t.actor?.isOwner)) {
+  const owned = canvas.tokens.placeables.filter(t => t.actor?.isOwner);
+  if (owned.length) {
+    const pc = owned.find(t => t.actor?.type === "character");
+    (pc ?? owned[0]).control({ releaseOthers: true });
+  }
+}
+const hover = canvas.tokens.hover ?? (() => {
+  const p = canvas.mousePosition;
+  if (!p) return null;
+  return canvas.tokens.placeables.find(t => t.bounds?.contains(p.x, p.y));
+})();
+if (hover) hover.setTarget(true, { releaseOthers: true, groupSelection: false });
+${applyCall}`
+    : applyCall;
 
   const existing = game.macros.find(m => m.getFlag(MODULE_ID, variant.macroFlag));
   if (existing) {
@@ -596,7 +666,6 @@ function bindDragTargets(html, selector) {
       const payload = JSON.stringify({ type, uuid });
       ev.dataTransfer.setData("text/plain", payload);
       ev.dataTransfer.effectAllowed = "copy";
-      console.log(`${MODULE_ID} | dragstart`, payload);
     });
   }
 }
@@ -695,6 +764,20 @@ Hooks.once("init", () => {
     }
   }
 
+  // Per-client volume slider. Registered first so it renders at the top of
+  // the module's settings section. Every cue this module plays (apply,
+  // trigger, expire) scales by this value on the local client — since all
+  // sounds are now played locally, each user controls their own volume.
+  game.settings.register(MODULE_ID, "volume", {
+    name: "Sound Volume",
+    hint: "Local volume for all Help Signal sounds. Each user sets their own.",
+    scope: "client",
+    config: true,
+    type: Number,
+    range: { min: 0, max: 1, step: 0.05 },
+    default: 0.8
+  });
+
   const registerString = (key, name, hint, def) =>
     game.settings.register(MODULE_ID, key, {
       name, hint, scope: "client", config: true, type: String, default: def
@@ -763,14 +846,27 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   game.socket.on(SOCKET, async (data) => {
+    // Every client (not just the GM) plays the apply cue locally on their
+    // own machine. Sound is scaled by each client's own volume slider.
+    if (data?.action === "applyCue") {
+      const tokens = [];
+      for (const uuid of data.tokenUuids ?? []) {
+        const doc = await fromUuid(uuid);
+        if (!doc) continue;
+        tokens.push(doc.object ?? doc);
+      }
+      playApplyCueLocal(tokens, data.cues ?? null);
+      return;
+    }
+
     if (!game.user.isGM) return;
 
     if (data?.action === "apply") {
       const variant = getVariant(data.variantKey);
       await applyToActorUuids(data.actorUuids ?? [], variant.key, data.instigatorUuid ?? null, data.cues ?? null);
-      ui.notifications.info(
-        `Applied "${variant.effectName}" to ${data.actorUuids.length} target(s) at ${data.requester}'s request.`
-      );
+      // ui.notifications.info(
+      //   `Applied "${variant.effectName}" to ${data.actorUuids.length} target(s) at ${data.requester}'s request.`
+      // ); // debug only
       return;
     }
 
@@ -797,7 +893,6 @@ Hooks.once("ready", () => {
     const existing = actor.effects.find(e => e.name === variant.effectName && e.id !== effect.id);
     if (!existing) return true;
 
-    console.log(`${MODULE_ID} | palette add-when-exists (${variant.key}) → converting to delete`);
     if (userId === game.user.id) {
       const uuid = existing.uuid;
       if (game.user.isGM) {
@@ -818,8 +913,8 @@ Hooks.once("ready", () => {
   });
 
   // Preload each effect's baked cue files on creation so trigger/expire cues
-  // are cached and ready. The apply cue is fired directly from the macro
-  // (playApplyCueGlobal), not from this hook.
+  // are cached and ready. The apply cue is played directly on all clients
+  // via the applyCue socket message, not from this hook.
   Hooks.on("createActiveEffect", (effect) => {
     if (!getVariantByEffectName(effect.name)) return;
     const cues = effect.getFlag(MODULE_ID, "cues");
@@ -835,7 +930,6 @@ Hooks.once("ready", () => {
     if (paths.length === 0) return;
 
     Sequencer.Preloader.preload(paths)
-      .then(() => console.log(`${MODULE_ID} | preloaded ${paths.length} baked cue file(s) for effect ${effect.id}`))
       .catch(e => console.warn(`${MODULE_ID} | baked-cue preload failed:`, e));
   });
 
@@ -911,7 +1005,6 @@ Hooks.once("ready", () => {
         const variant = getVariantByEffectName(effect.name);
         if (!variant || !variant.autoExpire) continue;
         if (effect.getFlag(MODULE_ID, "instigatorUuid")) continue;
-        console.log(`${MODULE_ID} | combat ended → clearing instigator-less ${effect.name} from ${actor.name}`);
         safeDeleteEffect(actor, effect);
       }
     }
@@ -962,25 +1055,19 @@ Hooks.once("ready", () => {
   });
 
   // Ensure every variant's macro + item exists. Wraps each call in try/catch
-  // so one variant's failure doesn't abort the rest, and logs progress so
-  // the browser console shows why anything is missing.
+  // so one variant's failure doesn't abort the rest.
   async function ensureAll() {
-    if (!game.user.isGM) {
-      console.log(`${MODULE_ID} | ensureAll skipped — not GM`);
-      return;
-    }
+    if (!game.user.isGM) return;
     for (const variant of Object.values(VARIANTS)) {
       try {
-        const macro = await ensureMacro(variant);
-        console.log(`${MODULE_ID} | ensureMacro(${variant.key}) →`, macro?.name ?? "(none)");
+        await ensureMacro(variant);
       } catch (e) {
         console.error(`${MODULE_ID} | ensureMacro(${variant.key}) threw:`, e);
       }
     }
     for (const variant of Object.values(VARIANTS)) {
       try {
-        const item = await ensureItem(variant);
-        console.log(`${MODULE_ID} | ensureItem(${variant.key}) →`, item?.name ?? "(none)");
+        await ensureItem(variant);
       } catch (e) {
         console.error(`${MODULE_ID} | ensureItem(${variant.key}) threw:`, e);
       }
@@ -1002,13 +1089,12 @@ Hooks.once("ready", () => {
   // the variant from the item's flag. Debounced to avoid firing twice if
   // both use-hooks fire for the same use.
   let lastHelpItemTrigger = 0;
-  const tryTriggerFromItem = (item, source) => {
+  const tryTriggerFromItem = (item) => {
     const variant = variantForItem(item);
     if (!variant) return;
     const now = Date.now();
     if (now - lastHelpItemTrigger < 500) return;
     lastHelpItemTrigger = now;
-    console.log(`${MODULE_ID} | ${variant.itemName} used (${source}) → triggering apply`);
     applyToCurrentTargets(variant.key);
   };
 
