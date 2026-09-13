@@ -158,6 +158,40 @@ const bandMateTriggerSpellsKey       = (mateKey) => `bandMateTriggerSpells_${mat
 const bandMateTriggerBardicKey       = (mateKey) => `bandMateTriggerBardic_${mateKey}`;
 const bandMateTriggerPerformanceKey  = (mateKey) => `bandMateTriggerPerformance_${mateKey}`;
 
+// Band Mate state lives on the User document as flags — NOT in Foundry
+// client-scoped settings. Foundry's client settings are stored in the
+// browser's localStorage, which is shared across all users logged in from
+// the same browser origin (last-write-wins between tabs). User flags are
+// keyed by user id server-side and are properly per-user regardless of how
+// the players are running their clients.
+function bandMateGetFlag(key, defaultVal) {
+  const v = game.user.getFlag(MODULE_ID, key);
+  return v === undefined ? defaultVal : v;
+}
+function bandMateSetFlag(key, value) {
+  return game.user.setFlag(MODULE_ID, key, value);
+}
+// Returns the default a specific per-mate flag should fall back to when the
+// user has never explicitly set it. Kept centralized so the read helpers and
+// the config dialog agree.
+function bandMateDefaultFor(mate, key) {
+  if (key === bandMateEnabledKey(mate.key))               return false;
+  if (key === bandMateSoundKey(mate.key))                 return mate.defaultSound;
+  if (key === bandMateAnimKey(mate.key))                  return mate.defaultAnimation;
+  if (key === bandMateHueKey(mate.key))                   return mate.defaultHue ?? 0;
+  if (key === bandMateSaturateKey(mate.key))              return mate.defaultSaturate ?? 1;
+  if (key === bandMateBrightnessKey(mate.key))            return mate.defaultBrightness ?? 1;
+  if (key === bandMateRainbowKey(mate.key))               return mate.defaultRainbow ?? false;
+  if (key === bandMateTriggerSpellsKey(mate.key))         return true;
+  if (key === bandMateTriggerBardicKey(mate.key))         return true;
+  if (key === bandMateTriggerPerformanceKey(mate.key))    return true;
+  return undefined;
+}
+function bandMateReadFor(mate, keyFn) {
+  const key = keyFn(mate.key);
+  return bandMateGetFlag(key, bandMateDefaultFor(mate, key));
+}
+
 function findBandMateMacro(mateKey, userId) {
   return game.macros.find(m =>
     m.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG) === mateKey &&
@@ -912,19 +946,19 @@ async function toggleBandMate(mateKey) {
     console.warn(`${MODULE_ID} | toggleBandMate: unknown mate "${mateKey}"`);
     return;
   }
-  const next = !game.settings.get(MODULE_ID, bandMateEnabledKey(mate.key));
+  const next = !bandMateGetFlag(bandMateEnabledKey(mate.key), false);
 
   if (next) {
     for (const other of BAND_MATES) {
       if (other.key === mate.key) continue;
-      if (game.settings.get(MODULE_ID, bandMateEnabledKey(other.key))) {
-        await game.settings.set(MODULE_ID, bandMateEnabledKey(other.key), false);
+      if (bandMateGetFlag(bandMateEnabledKey(other.key), false)) {
+        await bandMateSetFlag(bandMateEnabledKey(other.key), false);
         await updateBandMateMacroImg(other.key, false);
       }
     }
   }
 
-  await game.settings.set(MODULE_ID, bandMateEnabledKey(mate.key), next);
+  await bandMateSetFlag(bandMateEnabledKey(mate.key), next);
   await updateBandMateMacroImg(mate.key, next);
   ui.notifications.info(`${mate.name}: ${next ? "ON ✓" : "OFF ✗"}`);
 }
@@ -935,8 +969,8 @@ async function turnOffAllBandMates() {
   let changed = 0;
   for (const mate of BAND_MATES) {
     const key = bandMateEnabledKey(mate.key);
-    if (game.settings.get(MODULE_ID, key)) {
-      await game.settings.set(MODULE_ID, key, false);
+    if (bandMateGetFlag(key, false)) {
+      await bandMateSetFlag(key, false);
       changed++;
     }
     await updateBandMateMacroImg(mate.key, false);
@@ -957,7 +991,7 @@ function playBandMateCue(token = null) {
   const dbg = game.settings.get(MODULE_ID, "debugBandMate");
   const log = (...args) => { if (dbg) console.log(`${MODULE_ID} | BandMateCue |`, ...args); };
 
-  const fallbackAnim = game.settings.get(MODULE_ID, "bandMateAnimation");
+  const fallbackAnim = bandMateGetFlag("bandMateAnimation", "joetastic-help-signal.music_notations");
   const volume = getVolume();
   log(`volume=${volume}, sequencerSoundsEnabled=${game.settings.get?.("sequencer","soundsEnabled") ?? "?"}, viewedScene=${game.user.viewedScene}`);
 
@@ -967,16 +1001,16 @@ function playBandMateCue(token = null) {
   const soundPaths = [];
   let activeMate = null;
   for (const mate of BAND_MATES) {
-    if (!game.settings.get(MODULE_ID, bandMateEnabledKey(mate.key))) continue;
+    if (!bandMateReadFor(mate, bandMateEnabledKey)) continue;
     if (!activeMate) activeMate = mate;
-    const raw = game.settings.get(MODULE_ID, bandMateSoundKey(mate.key));
+    const raw = bandMateReadFor(mate, bandMateSoundKey);
     const resolved = resolveDbPath(raw);
     log(`mate=${mate.key} soundRaw="${raw}" resolved="${resolved}"`);
     if (resolved) soundPaths.push(resolved);
   }
 
   const animPath = activeMate
-    ? (game.settings.get(MODULE_ID, bandMateAnimKey(activeMate.key)) || fallbackAnim)
+    ? (bandMateReadFor(activeMate, bandMateAnimKey) || fallbackAnim)
     : fallbackAnim;
 
   if (soundPaths.length === 0 && !(animPath && token)) return;
@@ -998,10 +1032,10 @@ function playBandMateCue(token = null) {
         .anchor({ x: 0.5, y: 1 });
 
       if (activeMate) {
-        const hue        = Number(game.settings.get(MODULE_ID, bandMateHueKey(activeMate.key))) || 0;
-        const saturate   = Number(game.settings.get(MODULE_ID, bandMateSaturateKey(activeMate.key)));
-        const brightness = Number(game.settings.get(MODULE_ID, bandMateBrightnessKey(activeMate.key)));
-        const rainbow    = game.settings.get(MODULE_ID, bandMateRainbowKey(activeMate.key));
+        const hue        = Number(bandMateReadFor(activeMate, bandMateHueKey)) || 0;
+        const saturate   = Number(bandMateReadFor(activeMate, bandMateSaturateKey));
+        const brightness = Number(bandMateReadFor(activeMate, bandMateBrightnessKey));
+        const rainbow    = bandMateReadFor(activeMate, bandMateRainbowKey);
 
         const sat = Number.isFinite(saturate)   ? saturate   : 1;
         const bri = Number.isFinite(brightness) ? brightness : 1;
@@ -1034,7 +1068,7 @@ function playBandMateCue(token = null) {
 // True when this user has at least one Band Mate toggled ON. Used to gate the
 // chat hook early so we don't waste time on every message when no mate fires.
 function anyBandMateOn() {
-  return BAND_MATES.some(m => game.settings.get(MODULE_ID, bandMateEnabledKey(m.key)));
+  return BAND_MATES.some(m => bandMateReadFor(m, bandMateEnabledKey));
 }
 
 // Resolve the token that produced a chat message — used to place the Band
@@ -1179,15 +1213,15 @@ function openBandMateConfigDialog(mateKey) {
 
   const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;");
   const cur = {
-    sound:      game.settings.get(MODULE_ID, bandMateSoundKey(mate.key)),
-    animation:  game.settings.get(MODULE_ID, bandMateAnimKey(mate.key)),
-    hue:        Number(game.settings.get(MODULE_ID, bandMateHueKey(mate.key))) || 0,
-    saturate:   Number(game.settings.get(MODULE_ID, bandMateSaturateKey(mate.key))),
-    brightness: Number(game.settings.get(MODULE_ID, bandMateBrightnessKey(mate.key))),
-    rainbow:    !!game.settings.get(MODULE_ID, bandMateRainbowKey(mate.key)),
-    triggerSpells:      !!game.settings.get(MODULE_ID, bandMateTriggerSpellsKey(mate.key)),
-    triggerBardic:      !!game.settings.get(MODULE_ID, bandMateTriggerBardicKey(mate.key)),
-    triggerPerformance: !!game.settings.get(MODULE_ID, bandMateTriggerPerformanceKey(mate.key))
+    sound:      bandMateReadFor(mate, bandMateSoundKey),
+    animation:  bandMateReadFor(mate, bandMateAnimKey),
+    hue:        Number(bandMateReadFor(mate, bandMateHueKey)) || 0,
+    saturate:   Number(bandMateReadFor(mate, bandMateSaturateKey)),
+    brightness: Number(bandMateReadFor(mate, bandMateBrightnessKey)),
+    rainbow:    !!bandMateReadFor(mate, bandMateRainbowKey),
+    triggerSpells:      !!bandMateReadFor(mate, bandMateTriggerSpellsKey),
+    triggerBardic:      !!bandMateReadFor(mate, bandMateTriggerBardicKey),
+    triggerPerformance: !!bandMateReadFor(mate, bandMateTriggerPerformanceKey)
   };
   if (!Number.isFinite(cur.saturate))   cur.saturate = 1;
   if (!Number.isFinite(cur.brightness)) cur.brightness = 1;
@@ -1265,15 +1299,15 @@ function openBandMateConfigDialog(mateKey) {
             const readNum  = (n) => Number(form.querySelector(`[name="${n}"]`).value);
             const readBool = (n) => !!form.querySelector(`[name="${n}"]`).checked;
 
-            await game.settings.set(MODULE_ID, bandMateSoundKey(mate.key),      readStr("sound").trim());
-            await game.settings.set(MODULE_ID, bandMateAnimKey(mate.key),       readStr("animation").trim());
-            await game.settings.set(MODULE_ID, bandMateHueKey(mate.key),        Math.max(0, Math.min(359, Math.round(readNum("hue")) || 0)));
-            await game.settings.set(MODULE_ID, bandMateSaturateKey(mate.key),   Number.isFinite(readNum("saturate"))   ? readNum("saturate")   : 1);
-            await game.settings.set(MODULE_ID, bandMateBrightnessKey(mate.key), Number.isFinite(readNum("brightness")) ? readNum("brightness") : 1);
-            await game.settings.set(MODULE_ID, bandMateRainbowKey(mate.key),    readBool("rainbow"));
-            await game.settings.set(MODULE_ID, bandMateTriggerSpellsKey(mate.key),      readBool("triggerSpells"));
-            await game.settings.set(MODULE_ID, bandMateTriggerBardicKey(mate.key),      readBool("triggerBardic"));
-            await game.settings.set(MODULE_ID, bandMateTriggerPerformanceKey(mate.key), readBool("triggerPerformance"));
+            await bandMateSetFlag(bandMateSoundKey(mate.key),      readStr("sound").trim());
+            await bandMateSetFlag(bandMateAnimKey(mate.key),       readStr("animation").trim());
+            await bandMateSetFlag(bandMateHueKey(mate.key),        Math.max(0, Math.min(359, Math.round(readNum("hue")) || 0)));
+            await bandMateSetFlag(bandMateSaturateKey(mate.key),   Number.isFinite(readNum("saturate"))   ? readNum("saturate")   : 1);
+            await bandMateSetFlag(bandMateBrightnessKey(mate.key), Number.isFinite(readNum("brightness")) ? readNum("brightness") : 1);
+            await bandMateSetFlag(bandMateRainbowKey(mate.key),    readBool("rainbow"));
+            await bandMateSetFlag(bandMateTriggerSpellsKey(mate.key),      readBool("triggerSpells"));
+            await bandMateSetFlag(bandMateTriggerBardicKey(mate.key),      readBool("triggerBardic"));
+            await bandMateSetFlag(bandMateTriggerPerformanceKey(mate.key), readBool("triggerPerformance"));
             ui.notifications.info(`${mate.name}: settings saved.`);
             resolve(true);
           }
@@ -1308,7 +1342,7 @@ class BandMateMacrosMenuApp extends FormApplication {
   async getData() {
     const mates = BAND_MATES.map(mate => {
       const macro = findBandMateMacro(mate.key, game.user.id);
-      const isOn = game.settings.get(MODULE_ID, bandMateEnabledKey(mate.key));
+      const isOn = bandMateReadFor(mate, bandMateEnabledKey);
       return {
         key: mate.key,
         name: mate.name,
@@ -1482,74 +1516,14 @@ Hooks.once("init", () => {
     restricted: false
   });
 
-  // Band Mate: per-user, per-mate client toggles. Not shown in the module
-  // settings pane — toggled by clicking each mate's hotbar macro.
-  for (const mate of BAND_MATES) {
-    game.settings.register(MODULE_ID, bandMateEnabledKey(mate.key), {
-      scope: "client",
-      config: false,
-      type: Boolean,
-      default: false
-    });
-    registerString(bandMateSoundKey(mate.key),
-      `Band Mate Sound — ${mate.name}`,
-      `Sound played by ${mate.name} when a Band Mate trigger fires (spell cast, Bardic Inspiration, or Performance check). Sequencer DB path or file path. Blank to disable.`,
-      mate.defaultSound);
-    registerString(bandMateAnimKey(mate.key),
-      `Band Mate Animation — ${mate.name}`,
-      `Sequencer DB path for ${mate.name}'s animation. Blank to fall back to the shared default.`,
-      mate.defaultAnimation);
-    game.settings.register(MODULE_ID, bandMateHueKey(mate.key), {
-      name: `Band Mate Hue — ${mate.name}`,
-      hint: `Hue rotation in degrees applied to ${mate.name}'s animation. 0 = no change. Ignored when Rainbow is on (hue is animated).`,
-      scope: "client",
-      config: true,
-      type: Number,
-      range: { min: 0, max: 359, step: 1 },
-      default: mate.defaultHue ?? 0
-    });
-    game.settings.register(MODULE_ID, bandMateSaturateKey(mate.key), {
-      name: `Band Mate Saturation — ${mate.name}`,
-      hint: `Saturation multiplier for ${mate.name}'s animation. 0 = grayscale, 1 = unchanged, >1 = more vivid.`,
-      scope: "client",
-      config: true,
-      type: Number,
-      range: { min: 0, max: 2, step: 0.05 },
-      default: mate.defaultSaturate ?? 1
-    });
-    game.settings.register(MODULE_ID, bandMateBrightnessKey(mate.key), {
-      name: `Band Mate Brightness — ${mate.name}`,
-      hint: `Brightness multiplier for ${mate.name}'s animation. 0 = black, 1 = unchanged, >1 = brighter.`,
-      scope: "client",
-      config: true,
-      type: Number,
-      range: { min: 0, max: 2, step: 0.05 },
-      default: mate.defaultBrightness ?? 1
-    });
-    game.settings.register(MODULE_ID, bandMateRainbowKey(mate.key), {
-      name: `Band Mate Rainbow — ${mate.name}`,
-      hint: `When ON, ${mate.name}'s animation continuously cycles its hue for a rainbow effect (overrides the Hue value).`,
-      scope: "client",
-      config: true,
-      type: Boolean,
-      default: mate.defaultRainbow ?? false
-    });
-    // Per-mate trigger toggles. Managed via the right-click config dialog on
-    // the popup, so config:false keeps them out of the flat settings panel.
-    game.settings.register(MODULE_ID, bandMateTriggerSpellsKey(mate.key), {
-      scope: "client", config: false, type: Boolean, default: true
-    });
-    game.settings.register(MODULE_ID, bandMateTriggerBardicKey(mate.key), {
-      scope: "client", config: false, type: Boolean, default: true
-    });
-    game.settings.register(MODULE_ID, bandMateTriggerPerformanceKey(mate.key), {
-      scope: "client", config: false, type: Boolean, default: true
-    });
-  }
-
-  registerString("bandMateAnimation", "Band Mate Animation (fallback)",
-    "Fallback Sequencer DB path used when a specific mate's animation setting is blank.",
-    "joetastic-help-signal.music_notations");
+  // NOTE: Band Mate settings (enabled/sound/animation/hue/saturate/
+  // brightness/rainbow/trigger toggles + fallback animation) are NOT
+  // registered as Foundry settings. They live on the User document as flags
+  // (see bandMateGetFlag / bandMateSetFlag). Foundry client-scoped settings
+  // share localStorage between all users in the same browser origin, which
+  // caused two players in different tabs to overwrite each other's toggles.
+  // User flags are keyed by user id server-side and correctly isolate state
+  // per user regardless of how the clients are running.
 
   game.settings.register(MODULE_ID, "debugBandMate", {
     name: "Band Mate — Debug Logging",
@@ -1775,7 +1749,7 @@ Hooks.once("ready", () => {
     }
     log("trigger reason detected:", reason);
 
-    const activeMate = BAND_MATES.find(m => game.settings.get(MODULE_ID, bandMateEnabledKey(m.key)));
+    const activeMate = BAND_MATES.find(m => bandMateReadFor(m, bandMateEnabledKey));
     if (!activeMate) {
       log("skip: no active mate found (anyBandMateOn was true but find returned null?)");
       return;
@@ -1783,7 +1757,7 @@ Hooks.once("ready", () => {
     log("active mate:", activeMate.key);
 
     const triggerKey = bandMateTriggerSettingKey(activeMate.key, reason);
-    const triggerValue = triggerKey ? game.settings.get(MODULE_ID, triggerKey) : false;
+    const triggerValue = triggerKey ? bandMateGetFlag(triggerKey, true) : false;
     if (!triggerKey || !triggerValue) {
       log(`skip: trigger '${reason}' disabled for ${activeMate.key} (setting ${triggerKey}=${triggerValue})`);
       return;
