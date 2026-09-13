@@ -1,0 +1,41 @@
+<div class="jhs-band-mate-menu" style="padding: 1em;">
+  <p style="margin: 0 0 0.5em 0; text-align: center;">
+    <strong>Drag each Band Mate icon into a hotbar slot.</strong>
+  </p>
+  <p style="margin: 0 0 1em 0; text-align: center; font-size: 0.9em; opacity: 0.85;">
+    <b>Click</b> to toggle · <b>Right-click</b> to configure sound / animation / triggers · <b>Drag</b> to a hotbar slot.
+    Any Band Mates that are <b>ON</b> (✓) will each play their own sound whenever you cast a spell,
+    use Bardic Inspiration, or roll a Performance check.
+  </p>
+  <div style="display: flex; gap: 0.75em; justify-content: center; flex-wrap: wrap;">
+    {{#each mates}}
+      <div style="flex: 1 1 130px; min-width: 130px; max-width: 160px; text-align: center;">
+        {{#if this.exists}}
+          <div class="jhs-macro-drag" draggable="true" data-uuid="{{this.uuid}}"
+               data-drag-type="Macro" data-mate-key="{{this.key}}"
+               title="Click to toggle · drag to hotbar"
+               style="display: inline-block; cursor: pointer; text-decoration: none; color: inherit;
+                      -webkit-user-drag: element; user-select: none;">
+            <img src="{{this.img}}" alt="{{this.name}}" draggable="false"
+                 style="width: 96px; height: 96px; border: 2px solid #dc2626; border-radius: 10px;
+                        background: #0a0a0f; pointer-events: none;"/>
+            <div style="margin-top: 0.4em; font-weight: 700; pointer-events: none;">{{this.name}}</div>
+            <div style="margin-top: 0.2em; font-size: 0.85em; opacity: 0.85; pointer-events: none;">
+              {{this.stateLabel}}
+            </div>
+          </div>
+        {{else}}
+          <div style="opacity: 0.6;">
+            <em>{{this.name}}</em><br/>not yet created
+          </div>
+        {{/if}}
+      </div>
+    {{/each}}
+  </div>
+  <div style="text-align: center; margin-top: 1.25em;">
+    <button type="button" class="jhs-band-mate-off-all"
+            style="padding: 0.5em 1.25em; font-weight: 600; cursor: pointer;">
+      Turn Off All Band Mates
+    </button>
+  </div>
+</div>
