@@ -1,0 +1,56 @@
+<div class="jhs-sound-board-player" style="padding:0.75em;">
+  <p style="margin:0 0 0.6em 0; text-align:center; font-weight:700; font-size:1.05em;">{{boardName}}</p>
+
+  <div class="jhs-sb-board-volume-row"
+       style="display:flex; align-items:center; gap:0.55em; padding:0.4em 0.65em; margin-bottom:0.7em;
+              border-radius:6px; background:rgba(220,38,38,0.08); border:1px solid rgba(220,38,38,0.35);">
+    <i class="fas fa-volume-high" style="opacity:0.85;"></i>
+    <label style="opacity:0.85; font-size:0.85em; white-space:nowrap;">Board Volume</label>
+    <input type="range" class="jhs-sb-board-volume" min="0" max="1" step="0.05" value="{{boardVolume}}"
+           style="flex:1 1 0; min-width:0;"/>
+    <span class="jhs-sb-board-volume-label" style="min-width:3em; text-align:right; font-size:0.85em;">
+      {{boardVolumePercent}}%
+    </span>
+  </div>
+
+  {{#if hasSounds}}
+    <div class="jhs-sb-grid"
+         style="display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:0.6em;">
+      {{#each sounds}}
+        <button type="button" class="jhs-sb-play" data-idx="{{@index}}" data-loop="{{this.loop}}"
+                title="{{this.displayName}}"
+                style="display:flex; flex-direction:column; align-items:center; justify-content:center;
+                       min-height:78px; padding:0.55em 0.6em; border-radius:8px;
+                       border:2px solid #dc2626; background:#0a0a0f; color:#f5f5f4;
+                       cursor:pointer; font-weight:700;">
+          <span class="jhs-sb-btn-name"
+                style="text-align:center; font-size:0.95em; line-height:1.15;
+                       word-break:break-word; overflow-wrap:anywhere; max-width:100%;">
+            {{this.displayName}}
+          </span>
+          <span class="jhs-sb-btn-meta" style="margin-top:0.35em; font-size:0.72em; opacity:0.75; font-weight:500;">
+            {{this.volumePercent}}%{{#if this.loop}} · LOOP{{/if}}
+          </span>
+          <span class="jhs-sb-btn-state" style="margin-top:0.15em; font-size:0.72em; opacity:0.9; visibility:hidden;">
+            ▶ PLAYING
+          </span>
+        </button>
+      {{/each}}
+    </div>
+    <p style="margin:0.85em 0 0 0; text-align:center; font-size:0.8em; opacity:0.65;">
+      Clicking a looping button again stops it. Right-click a sound to edit it. Closing this window stops all loops.
+    </p>
+  {{else}}
+    <p style="opacity:0.7; text-align:center;"><em>No sounds configured.</em></p>
+  {{/if}}
+
+  {{#if isOwner}}
+    <div style="margin-top:0.7em; text-align:center;">
+      <button type="button" class="jhs-sb-new-sound"
+              style="padding:0.4em 1em; border-radius:8px; border:1px dashed #22c55e;
+                     background:transparent; color:#f5f5f4; font-weight:600; cursor:pointer;">
+        <i class="fas fa-plus"></i> New Sound
+      </button>
+    </div>
+  {{/if}}
+</div>

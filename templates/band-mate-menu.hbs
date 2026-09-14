@@ -1,41 +1,61 @@
 <div class="jhs-band-mate-menu" style="padding: 1em;">
-  <p style="margin: 0 0 0.5em 0; text-align: center;">
-    <strong>Drag each Band Mate icon into a hotbar slot.</strong>
+  <p style="margin: 0 0 0.4em 0; text-align: center;">
+    <strong>Pick your Band Mate.</strong>
   </p>
   <p style="margin: 0 0 1em 0; text-align: center; font-size: 0.9em; opacity: 0.85;">
-    <b>Click</b> to toggle · <b>Right-click</b> to configure sound / animation / triggers · <b>Drag</b> to a hotbar slot.
-    Any Band Mates that are <b>ON</b> (✓) will each play their own sound whenever you cast a spell,
-    use Bardic Inspiration, or roll a Performance check.
+    <b>Click</b> a mate to select it — your single Band Mate macro will re-point at that mate.
+    <b>Right-click</b> to configure sound / animation / triggers.
+    <b>Drag</b> the macro icon (below) into a hotbar slot; click it to toggle the selected mate ON/OFF.
   </p>
-  <div style="display: flex; gap: 0.75em; justify-content: center; flex-wrap: wrap;">
+
+  <div style="display: flex; gap: 0.6em; justify-content: center; flex-wrap: wrap; margin-bottom: 1em;">
     {{#each mates}}
-      <div style="flex: 1 1 130px; min-width: 130px; max-width: 160px; text-align: center;">
-        {{#if this.exists}}
-          <div class="jhs-macro-drag" draggable="true" data-uuid="{{this.uuid}}"
-               data-drag-type="Macro" data-mate-key="{{this.key}}"
-               title="Click to toggle · drag to hotbar"
-               style="display: inline-block; cursor: pointer; text-decoration: none; color: inherit;
-                      -webkit-user-drag: element; user-select: none;">
-            <img src="{{this.img}}" alt="{{this.name}}" draggable="false"
-                 style="width: 96px; height: 96px; border: 2px solid #dc2626; border-radius: 10px;
-                        background: #0a0a0f; pointer-events: none;"/>
-            <div style="margin-top: 0.4em; font-weight: 700; pointer-events: none;">{{this.name}}</div>
-            <div style="margin-top: 0.2em; font-size: 0.85em; opacity: 0.85; pointer-events: none;">
-              {{this.stateLabel}}
-            </div>
-          </div>
-        {{else}}
-          <div style="opacity: 0.6;">
-            <em>{{this.name}}</em><br/>not yet created
-          </div>
+      <button type="button" class="jhs-band-mate-select" data-mate-key="{{this.key}}"
+              title="Click to select · Right-click to configure"
+              style="flex: 1 1 90px; min-width: 90px; max-width: 140px;
+                     padding: 0.55em 0.7em; border-radius: 8px; cursor: pointer;
+                     font-weight: 700; font-size: 0.95em;
+                     {{#if this.selected}}
+                       background: rgba(220,38,38,0.15); color: #f5f5f4;
+                       border: 2px solid #dc2626; box-shadow: 0 0 8px rgba(220,38,38,0.4);
+                     {{else}}
+                       background: transparent; color: inherit;
+                       border: 1px dashed rgba(220,38,38,0.55);
+                     {{/if}}">
+        {{this.name}}
+        {{#if this.active}}
+          <div style="margin-top: 0.15em; font-size: 0.75em; opacity: 0.9; font-weight: 500;">ON ✓</div>
         {{/if}}
-      </div>
+      </button>
     {{/each}}
   </div>
-  <div style="text-align: center; margin-top: 1.25em;">
+
+  <div style="text-align: center;">
+    {{#if macroExists}}
+      <div class="jhs-macro-drag" draggable="true" data-uuid="{{macroUuid}}"
+           data-drag-type="Macro"
+           title="Click to toggle · drag to hotbar"
+           style="display: inline-block; cursor: pointer; text-decoration: none; color: inherit;
+                  -webkit-user-drag: element; user-select: none;">
+        <img src="{{macroImg}}" alt="{{macroName}}" draggable="false"
+             style="width: 96px; height: 96px; border: 2px solid #dc2626; border-radius: 10px;
+                    background: #0a0a0f; pointer-events: none;"/>
+        <div style="margin-top: 0.4em; font-weight: 700; pointer-events: none;">{{macroName}}</div>
+        <div style="margin-top: 0.15em; font-size: 0.85em; opacity: 0.85; pointer-events: none;">
+          {{#if isOn}}ON ✓{{else}}OFF ✗{{/if}}
+        </div>
+      </div>
+    {{else}}
+      <div style="opacity: 0.65;">
+        <em>Macro not created yet — ask your GM to reload the world.</em>
+      </div>
+    {{/if}}
+  </div>
+
+  <div style="text-align: center; margin-top: 1em;">
     <button type="button" class="jhs-band-mate-off-all"
             style="padding: 0.5em 1.25em; font-weight: 600; cursor: pointer;">
-      Turn Off All Band Mates
+      Turn Off Band Mate
     </button>
   </div>
 </div>

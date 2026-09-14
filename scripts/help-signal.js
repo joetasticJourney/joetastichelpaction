@@ -105,16 +105,22 @@ const DEFAULT_VARIANT_KEY = "attack";
 
 // Band Mate feature: each user gets one toggle macro per named band mate. A
 // macro plays its mate's sound (globally) whenever the acting user casts a
-// spell, uses Bardic Inspiration, or rolls Performance. Multiple mates can be
-// ON simultaneously so their sounds layer.
+// spell, uses Bardic Inspiration, or rolls Performance. Only one mate can be
+// active at a time per user (enforced in toggleBandMate).
 const BAND_MATE_ICON_ON  = `modules/${MODULE_ID}/icons/bandmate-check.svg`;
 const BAND_MATE_ICON_OFF = `modules/${MODULE_ID}/icons/bandmate-x.svg`;
-// Flags on band-mate macros identify which named mate + which user they belong
-// to, so we can find the right macro to flip on toggle.
+// Every user has exactly ONE band-mate macro (representing their current
+// selection). BAND_MATE_MATE_FLAG stores which mate that macro currently
+// points at — updated in place whenever the user changes selection via the
+// Band Mate menu. BAND_MATE_USER_FLAG identifies the owning user so we can
+// find the macro to update/delete without a full ownership scan.
 const BAND_MATE_MATE_FLAG = "bandMateMateKey";
 const BAND_MATE_USER_FLAG = "bandMateUserId";
-// Legacy flag from the single-macro version — used only for cleanup of stale
-// macros left over from before this expansion.
+// User-doc flag: the mate key the user has chosen. Read-through to derive
+// which mate the user's macro should currently represent.
+const BAND_MATE_SELECTED_FLAG = "selectedBandMateKey";
+// Legacy flag from a very early version — used only for cleanup of stale
+// macros left over from before mate/user flags were introduced.
 const BAND_MATE_LEGACY_USER_FLAG = "bandMateMacroUserId";
 
 // Each mate carries its own animation path plus ColorMatrix filter params
@@ -192,11 +198,17 @@ function bandMateReadFor(mate, keyFn) {
   return bandMateGetFlag(key, bandMateDefaultFor(mate, key));
 }
 
-function findBandMateMacro(mateKey, userId) {
-  return game.macros.find(m =>
-    m.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG) === mateKey &&
-    m.getFlag(MODULE_ID, BAND_MATE_USER_FLAG) === userId
-  );
+// Locate the single band-mate macro belonging to a given user, regardless of
+// which mate it currently represents. Every user has exactly one such doc.
+function findUserBandMateMacro(userId) {
+  return game.macros.find(m => m.getFlag(MODULE_ID, BAND_MATE_USER_FLAG) === userId);
+}
+
+// Resolve which mate a user has selected right now. Falls back to the first
+// mate in BAND_MATES if the flag is missing (fresh user, migrating world).
+function getUserSelectedMate(user) {
+  const key = user?.getFlag?.(MODULE_ID, BAND_MATE_SELECTED_FLAG);
+  return BAND_MATES.find(m => m.key === key) ?? BAND_MATES[0];
 }
 
 function getVariant(key) {
@@ -607,6 +619,24 @@ const HARDCODED_SOUND_ENTRIES = {
     billandted8: `modules/${MODULE_ID}/Sounds/BillandTed/billandted8.mp3`,
     billandted9: `modules/${MODULE_ID}/Sounds/BillandTed/Billandted9.mp3`
   },
+  redeemer: {
+    redeemer1: `modules/${MODULE_ID}/Sounds/Redeemer/Redeemer1.mp3`,
+    redeemer2: `modules/${MODULE_ID}/Sounds/Redeemer/Redeemer2.mp3`,
+    redeemer3: `modules/${MODULE_ID}/Sounds/Redeemer/redeemer3.mp3`,
+    redeemer4: `modules/${MODULE_ID}/Sounds/Redeemer/redeemer4.mp3`
+  },
+  // Miscellaneous one-offs kept out of the named mate/song groups. Nested
+  // subfolders (e.g. Decayvis) each get their own sub-namespace.
+  otherstuff: {
+    buhbum: `modules/${MODULE_ID}/Sounds/otherstuff/buhbum.mp3`,
+    decayvis: {
+      bagpipeintro:   `modules/${MODULE_ID}/Sounds/otherstuff/Decayvis/BagpipeIntro.mp3`,
+      blind1:         `modules/${MODULE_ID}/Sounds/otherstuff/Decayvis/blind1.mp3`,
+      blindintrolong: `modules/${MODULE_ID}/Sounds/otherstuff/Decayvis/Blindintrolong.mp3`,
+      blindshort2:    `modules/${MODULE_ID}/Sounds/otherstuff/Decayvis/Blindshort2.mp3`,
+      blindshort3:    `modules/${MODULE_ID}/Sounds/otherstuff/Decayvis/blindshort3.mp3`
+    }
+  },
   // Animations (JB2A files copied in and re-registered under our namespace).
   explosion: {
     // Mirrors jb2a.explosion.06 — OutPulse burst template, 4 color variants
@@ -895,31 +925,62 @@ function bindDragTargets(html, selector) {
   }
 }
 
-// Per-user, per-mate Band Mate macro. GM creates one for each (user, mate)
-// pair with OWNER perms so the user can flip their macro's img when toggling.
-async function ensureBandMateMacro(user, mate) {
-  if (!game.user.isGM) return null;
-  if (!user || !mate) return null;
+// A user's single Band Mate macro, kept in sync with the mate they've
+// selected in the menu. Idempotent — call any time to bring the existing doc
+// up to date, or create it if missing.
+//
+// Called in two situations:
+//  1. GM sweep on ready / userConnected — creates any missing macros with
+//     the right ownership so the user can update their own icon on toggle.
+//  2. When any user changes their selection in the menu — reroutes their
+//     macro to the new mate. The user owns the macro so they can update it
+//     directly; falls back to a GM socket delegation if ownership got
+//     stripped somehow (see updateBandMateMacroImg's socket pattern).
+async function ensureBandMateMacro(user) {
+  if (!user) return null;
 
-  const existing = findBandMateMacro(mate.key, user.id);
-  const expectedName = `${mate.name} (${user.name})`;
-  const expectedCommand =
-    `game.modules.get("${MODULE_ID}").api.toggleBandMate(${JSON.stringify(mate.key)});`;
+  const mate = getUserSelectedMate(user);
+  const isOn = !!user.getFlag(MODULE_ID, bandMateEnabledKey(mate.key));
+  const expectedName    = `${mate.name} (${user.name})`;
+  const expectedCommand = `game.modules.get("${MODULE_ID}").api.toggleBandMate(${JSON.stringify(mate.key)});`;
+  const expectedImg     = isOn ? BAND_MATE_ICON_ON : BAND_MATE_ICON_OFF;
 
+  const existing = findUserBandMateMacro(user.id);
   if (existing) {
     const updates = {};
-    if (existing.name !== expectedName) updates.name = expectedName;
+    if (existing.name    !== expectedName)    updates.name    = expectedName;
     if (existing.command !== expectedCommand) updates.command = expectedCommand;
-    if (Object.keys(updates).length) await existing.update(updates);
+    if (existing.img     !== expectedImg)     updates.img     = expectedImg;
+    if (existing.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG) !== mate.key) {
+      updates[`flags.${MODULE_ID}.${BAND_MATE_MATE_FLAG}`] = mate.key;
+    }
+    if (Object.keys(updates).length === 0) return existing;
+    if (game.user.isGM || existing.isOwner) {
+      await existing.update(updates);
+    } else if (game.users.some(u => u.isGM && u.active)) {
+      // Rare fallback — user lacks OWNER on their macro. Delegate to GM.
+      game.socket.emit(SOCKET, {
+        action: "updateBandMateMacro",
+        macroUuid: existing.uuid,
+        updates
+      });
+    }
     return existing;
   }
+
+  if (!game.user.isGM) return null; // Only GMs create fresh docs.
 
   return await Macro.create({
     name: expectedName,
     type: "script",
-    img: BAND_MATE_ICON_OFF,
+    img: expectedImg,
     command: expectedCommand,
-    flags: { [MODULE_ID]: { [BAND_MATE_MATE_FLAG]: mate.key, [BAND_MATE_USER_FLAG]: user.id } },
+    flags: {
+      [MODULE_ID]: {
+        [BAND_MATE_MATE_FLAG]: mate.key,
+        [BAND_MATE_USER_FLAG]: user.id
+      }
+    },
     ownership: {
       default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE,
       [user.id]: CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER
@@ -927,10 +988,33 @@ async function ensureBandMateMacro(user, mate) {
   });
 }
 
+// Change which mate a user's macro represents. Any currently-active mate is
+// switched OFF first (only makes sense to call on the local user, since flag
+// writes on another user's doc need GM perms anyway).
+async function setUserSelectedMate(mateKey) {
+  const mate = BAND_MATES.find(m => m.key === mateKey);
+  if (!mate) return;
+
+  // Turn off any mate that's currently ON — matches the one-active-mate rule.
+  for (const other of BAND_MATES) {
+    if (other.key === mate.key) continue;
+    if (bandMateGetFlag(bandMateEnabledKey(other.key), false)) {
+      await bandMateSetFlag(bandMateEnabledKey(other.key), false);
+    }
+  }
+
+  await bandMateSetFlag(BAND_MATE_SELECTED_FLAG, mate.key);
+  // Regenerate the user's single macro to point at the new mate.
+  await ensureBandMateMacro(game.user);
+}
+
 // One-shot cleanup: delete any macros left over from the single-macro version
 // of Band Mate. Safe to call every ready sweep — no-ops after the first pass.
 async function cleanupLegacyBandMateMacros() {
   if (!game.user.isGM) return;
+  // Two legacy shapes to sweep:
+  //  (a) very-early single-macro version, missing the mate-key flag entirely.
+  //  (b) per-mate-per-user era (5 macros per user) — collapses to 1 per user.
   const stale = game.macros.filter(m =>
     m.getFlag(MODULE_ID, BAND_MATE_LEGACY_USER_FLAG) &&
     !m.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG)
@@ -939,13 +1023,43 @@ async function cleanupLegacyBandMateMacros() {
     try { await m.delete(); }
     catch (e) { console.warn(`${MODULE_ID} | cleanupLegacyBandMateMacros delete failed:`, e); }
   }
+
+  // Collapse per-(user,mate) macros down to one macro per user. Keep the
+  // macro whose mate matches the user's selected key (or the first macro if
+  // the user has no selection yet), delete the rest, and stamp the selection
+  // flag so future ensureBandMateMacro calls preserve it.
+  for (const user of game.users) {
+    const owned = game.macros.filter(m =>
+      m.getFlag(MODULE_ID, BAND_MATE_USER_FLAG) === user.id
+    );
+    if (owned.length <= 1) continue;
+    const selectedKey = user.getFlag(MODULE_ID, BAND_MATE_SELECTED_FLAG);
+    const keeper = owned.find(m => m.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG) === selectedKey)
+                ?? owned[0];
+    for (const m of owned) {
+      if (m.id === keeper.id) continue;
+      try { await m.delete(); }
+      catch (e) { console.warn(`${MODULE_ID} | collapse band-mate macros: delete failed:`, e); }
+    }
+    if (!selectedKey) {
+      const key = keeper.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG);
+      if (key) {
+        try { await user.setFlag(MODULE_ID, BAND_MATE_SELECTED_FLAG, key); }
+        catch (e) { console.warn(`${MODULE_ID} | seed selectedBandMateKey failed:`, e); }
+      }
+    }
+  }
 }
 
-// Update the current user's macro img to reflect a mate's ON/OFF state. Uses
-// direct update if the user has OWNER perms; otherwise delegates to the GM.
+// Update the current user's single band-mate macro's img to reflect ON/OFF.
+// Direct update when the user owns it; otherwise delegates to the GM via
+// socket. Only relevant when the toggled mate matches the macro's current
+// mate — a stale toggle of a non-selected mate is silently ignored (there's
+// no macro for that mate to update).
 async function updateBandMateMacroImg(mateKey, on) {
-  const macro = findBandMateMacro(mateKey, game.user.id);
+  const macro = findUserBandMateMacro(game.user.id);
   if (!macro) return;
+  if (macro.getFlag(MODULE_ID, BAND_MATE_MATE_FLAG) !== mateKey) return;
   const newImg = on ? BAND_MATE_ICON_ON : BAND_MATE_ICON_OFF;
   if (macro.img === newImg) return;
   if (game.user.isGM || macro.isOwner) {
@@ -960,9 +1074,11 @@ async function updateBandMateMacroImg(mateKey, on) {
   }
 }
 
-// Called by a Band Mate macro on click. Flips this user's toggle for that
-// specific mate and updates the macro icon. Only one mate is allowed on at a
-// time — turning one ON forces every other mate OFF first.
+// Called by a Band Mate macro on click. Flips this user's toggle for the
+// mate the macro is currently pointing at. Only one mate is allowed on at a
+// time — turning one ON forces every other mate OFF first (which is mostly
+// theoretical now that only one macro exists per user, but kept for safety
+// during the migration window).
 async function toggleBandMate(mateKey) {
   const mate = BAND_MATES.find(m => m.key === mateKey);
   if (!mate) {
@@ -976,7 +1092,6 @@ async function toggleBandMate(mateKey) {
       if (other.key === mate.key) continue;
       if (bandMateGetFlag(bandMateEnabledKey(other.key), false)) {
         await bandMateSetFlag(bandMateEnabledKey(other.key), false);
-        await updateBandMateMacroImg(other.key, false);
       }
     }
   }
@@ -986,8 +1101,9 @@ async function toggleBandMate(mateKey) {
   ui.notifications.info(`${mate.name}: ${next ? "ON ✓" : "OFF ✗"}`);
 }
 
-// Reset button: turn every Band Mate off for the local user and flip each of
-// their macro icons back to X.
+// Reset: turn every Band Mate off for the local user and flip the macro back
+// to X. Since only one macro exists per user, only the currently-selected
+// mate's img changes here — the other mates just have their flags cleared.
 async function turnOffAllBandMates() {
   let changed = 0;
   for (const mate of BAND_MATES) {
@@ -996,8 +1112,9 @@ async function turnOffAllBandMates() {
       await bandMateSetFlag(key, false);
       changed++;
     }
-    await updateBandMateMacroImg(mate.key, false);
   }
+  const selected = getUserSelectedMate(game.user);
+  await updateBandMateMacroImg(selected.key, false);
   ui.notifications.info(
     changed === 0
       ? "No Band Mates were on."
@@ -1347,68 +1464,84 @@ function openBandMateConfigDialog(mateKey) {
   });
 }
 
-// Popup showing all five of the current user's Band Mate macros side-by-side.
-// Each is a draggable icon; clicking it in the hotbar toggles that mate.
-// The "Turn Off All" button resets every mate for the local user.
+// Popup for the local user's Band Mate management. Shows five selector
+// buttons (one per mate) — clicking one makes the user's single Band Mate
+// macro represent that mate. Right-click opens the per-mate config dialog
+// (sound / animation / triggers). Below the selectors: the user's macro as
+// a draggable target for the hotbar plus a Turn-Off-All button.
 class BandMateMacrosMenuApp extends FormApplication {
   static get defaultOptions() {
     return foundry.utils.mergeObject(super.defaultOptions, {
       id: `${MODULE_ID}-band-mate-menu`,
-      title: "Band Mates — Drag to Hotbar",
+      title: "Band Mate — Select and Drag",
       template: `modules/${MODULE_ID}/templates/band-mate-menu.hbs`,
-      width: 820,
+      width: 640,
       height: "auto",
       classes: [MODULE_ID]
     });
   }
 
   async getData() {
-    const mates = BAND_MATES.map(mate => {
-      const macro = findBandMateMacro(mate.key, game.user.id);
-      const isOn = bandMateReadFor(mate, bandMateEnabledKey);
-      return {
-        key: mate.key,
-        name: mate.name,
-        exists: !!macro,
-        uuid: macro?.uuid ?? null,
-        img: macro?.img ?? BAND_MATE_ICON_OFF,
-        stateLabel: isOn ? "ON ✓" : "OFF ✗"
-      };
-    });
-    return { mates };
+    const selected = getUserSelectedMate(game.user);
+    const activeKey = BAND_MATES.find(m => bandMateReadFor(m, bandMateEnabledKey))?.key ?? null;
+    const mates = BAND_MATES.map(mate => ({
+      key: mate.key,
+      name: mate.name,
+      selected: mate.key === selected.key,
+      active:   mate.key === activeKey
+    }));
+    const macro = findUserBandMateMacro(game.user.id);
+    return {
+      mates,
+      selectedName: selected.name,
+      macroUuid: macro?.uuid ?? null,
+      macroImg:  macro?.img  ?? BAND_MATE_ICON_OFF,
+      macroName: macro?.name ?? `${selected.name} (${game.user.name})`,
+      macroExists: !!macro,
+      isOn: activeKey === selected.key
+    };
   }
 
   activateListeners(html) {
     super.activateListeners(html);
-    bindDragTargets(html, ".jhs-macro-drag");
     const root = html?.[0] ?? html;
 
-    // Click-to-toggle on each mate icon. Guard against a completed drag also
-    // firing a click by setting a short-lived dragging flag on dragstart.
-    // Right-click opens the per-mate config dialog.
-    const drags = root?.querySelectorAll?.(".jhs-macro-drag") ?? [];
-    for (const drag of drags) {
-      drag.addEventListener("dragstart", () => {
-        drag.dataset.jhsDragging = "1";
+    // Selector buttons — click selects (regenerates macro), right-click
+    // opens the per-mate config dialog (sound / animation / triggers).
+    const selectors = root?.querySelectorAll?.(".jhs-band-mate-select") ?? [];
+    for (const btn of selectors) {
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const mateKey = btn.dataset.mateKey;
+        if (!mateKey) return;
+        await setUserSelectedMate(mateKey);
+        this.render(true);
       });
-      drag.addEventListener("dragend", () => {
+      btn.addEventListener("contextmenu", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const mateKey = btn.dataset.mateKey;
+        if (!mateKey) return;
+        await openBandMateConfigDialog(mateKey);
+        this.render(true);
+      });
+    }
+
+    // Drag the single macro to the hotbar; click toggles it.
+    const drag = root?.querySelector?.(".jhs-macro-drag");
+    if (drag) {
+      bindDragTargets(html, ".jhs-macro-drag");
+      drag.addEventListener("dragstart", () => { drag.dataset.jhsDragging = "1"; });
+      drag.addEventListener("dragend",   () => {
         setTimeout(() => { delete drag.dataset.jhsDragging; }, 100);
       });
       drag.addEventListener("click", async (ev) => {
         if (drag.dataset.jhsDragging === "1") return;
-        const mateKey = drag.dataset.mateKey;
-        if (!mateKey) return;
         ev.preventDefault();
         ev.stopPropagation();
-        await toggleBandMate(mateKey);
-        this.render(true);
-      });
-      drag.addEventListener("contextmenu", async (ev) => {
-        const mateKey = drag.dataset.mateKey;
-        if (!mateKey) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        await openBandMateConfigDialog(mateKey);
+        const selected = getUserSelectedMate(game.user);
+        await toggleBandMate(selected.key);
         this.render(true);
       });
     }
@@ -1424,6 +1557,1055 @@ class BandMateMacrosMenuApp extends FormApplication {
   }
 
   async _updateObject() {}
+}
+
+// ============================================================================
+// Sound Board
+// ----------------------------------------------------------------------------
+// Users configure a board of sounds (name + volume + loop) in a setup dialog,
+// hit Save, and get a macro they can drag to their hotbar. Clicking the macro
+// opens a grid of buttons; clicking a button broadcasts the sound to every
+// client via the module socket so everyone hears it. Looping sounds show a
+// PLAYING state and stop on second click.
+//
+// Board data lives on the generated macro as flags[MODULE_ID].soundBoard.
+// Dropping an existing sound-board macro into the setup dialog loads its data
+// for editing (Save then updates that macro in place instead of creating a new
+// one).
+// ============================================================================
+
+const SOUND_BOARD_FLAG         = "soundBoard";
+const SOUND_BOARD_MACRO_TAG    = "soundBoardMacro"; // = true on all board macros
+// First line of every generated macro's command. Doubles as a human-readable
+// marker AND a fallback identifier for the setup dialog's drop handler — if
+// the flag is somehow missing on a macro (manual edit, cross-world import),
+// the comment is still enough to recognise our macros.
+const SOUND_BOARD_MACRO_HEADER = "// jhs-sound-board :: DO NOT EDIT — generated by Joetastic Help Signal (Sound Board)";
+
+// True when a macro doc came out of this module's Sound Board feature. Any of
+// the three signals (flag, tag, header comment) is sufficient — belt-and-
+// suspenders so older-format macros still validate after the header was added.
+function _isSoundBoardMacro(macro) {
+  if (!macro) return false;
+  try {
+    if (macro.getFlag?.(MODULE_ID, SOUND_BOARD_MACRO_TAG)) return true;
+    if (macro.getFlag?.(MODULE_ID, SOUND_BOARD_FLAG))     return true;
+  } catch { /* ignore */ }
+  const cmd = typeof macro.command === "string" ? macro.command : "";
+  return cmd.startsWith(SOUND_BOARD_MACRO_HEADER);
+}
+
+// Personal, per-client scalar applied to every sound board's playback on
+// this machine. Registered as a hidden client-scoped setting (config: false)
+// in init — see `soundBoardVolume` below. One value shared across every
+// board, which sidesteps the orphan-user-flag problem the earlier per-board
+// design had when a sound board's macro was deleted.
+function _getBoardVolume() {
+  try {
+    const v = Number(game.settings.get(MODULE_ID, "soundBoardVolume"));
+    if (!Number.isFinite(v)) return 1;
+    return Math.max(0, Math.min(1, v));
+  } catch { return 1; }
+}
+async function _setBoardVolume(value) {
+  const n = Math.max(0, Math.min(1, Number(value) || 0));
+  try { await game.settings.set(MODULE_ID, "soundBoardVolume", n); }
+  catch (e) { console.warn(`${MODULE_ID} | soundBoardVolume persist failed:`, e); }
+  return n;
+}
+
+// One-time cleanup: earlier versions stored the sound-board slider as
+// per-board User flags (`soundBoardVolume_<boardId>`). The universal client
+// setting supersedes those, and any leftover flags are pure orphans. Sweeps
+// this user's own flags on ready — no permissions needed since each user
+// unsets their own.
+async function _cleanupLegacyBoardVolumeFlags() {
+  const flags = game.user?.flags?.[MODULE_ID];
+  if (!flags) return;
+  const stale = Object.keys(flags).filter(k => k.startsWith("soundBoardVolume_"));
+  for (const key of stale) {
+    try { await game.user.unsetFlag(MODULE_ID, key); }
+    catch (e) { console.warn(`${MODULE_ID} | unset legacy flag "${key}" failed:`, e); }
+  }
+  if (stale.length) {
+    console.log(`${MODULE_ID} | cleaned up ${stale.length} legacy soundBoardVolume_* flag(s) on User doc`);
+  }
+}
+
+// Client-scoped registry of currently playing sound-board instances (loop
+// AND non-loop). Keyed by instanceId so soundBoardStopLocal can find + stop
+// the right Sound handle. Each entry carries the raw (pre-scaling) volume so
+// the shared board slider can live-adjust playing loops on this client.
+// Entries auto-remove on the Sound's "end"/"stop" events, so non-loop sounds
+// clean themselves up when they finish naturally.
+const _soundBoardSounds = new Map();
+
+// Instances stopped while their Sound was still loading. AudioHelper.play is
+// async — a fast "click then close" flow can issue the stop *before* the
+// play has finished resolving, leaving the Sound handle absent from the map
+// and the stop a no-op. Any instanceId parked here is stopped the moment
+// its Sound lands in soundBoardPlayLocal, closing the race. Entries expire
+// after 30s so a genuinely unmatched stop can't leak forever.
+const _soundBoardPendingCancellations = new Set();
+
+// Preview a sound locally (never broadcast) at its configured per-sound
+// volume × the local module volume. Skips the shared board slider so the
+// preview reflects what's actually saved in the row, not what the user set
+// on their board-volume slider. Fire-and-forget, no loop.
+async function _soundBoardPreviewLocal(ref, volume) {
+  if (!ref || !ref.trim()) {
+    ui.notifications.warn("Nothing to preview — enter a sound reference first.");
+    return;
+  }
+  const resolved = resolveDbPath(ref.trim());
+  if (!resolved) {
+    ui.notifications.warn(`Couldn't resolve "${ref}" to a sound.`);
+    return;
+  }
+  const rawVolume   = Math.max(0, Math.min(1, Number(volume) || 0));
+  const finalVolume = rawVolume * getVolume();
+  try {
+    await foundry.audio.AudioHelper.play(
+      { src: resolved, volume: finalVolume, loop: false, autoplay: true },
+      false
+    );
+  } catch (e) {
+    ui.notifications.error(`Preview failed: ${e?.message ?? e}`);
+    console.warn(`${MODULE_ID} | preview failed for "${resolved}":`, e);
+  }
+}
+
+// Fallback label chain for a sound button when the user left the Name field
+// blank in the setup. Prefers the explicit name; else the filename (no ext);
+// else the Sequencer DB tail; else a generic placeholder.
+function _soundBoardDisplayName(entry) {
+  const explicit = String(entry?.name ?? "").trim();
+  if (explicit) return explicit;
+  const ref = String(entry?.ref ?? "").trim();
+  if (!ref) return "(unnamed)";
+  if (ref.includes("/") || ref.includes("\\")) {
+    const base = ref.split(/[\\\/]/).pop() ?? ref;
+    return base.replace(/\.[^.]+$/, "") || ref;
+  }
+  const tail = ref.split(".").pop();
+  return tail || ref;
+}
+
+function _sanitizeBoardData(raw) {
+  // Stable per-board id — used to key the per-user volume flag and loop
+  // instance ids. Minted here if the incoming data doesn't carry one so a
+  // brand-new setup dialog gets a fresh id on first save. Preserved across
+  // export/import because it lives inside the board data itself, not on the
+  // macro doc.
+  const boardId = String(raw?.boardId ?? "").trim() || foundry.utils.randomID();
+  const name = String(raw?.name ?? "Sound Board").slice(0, 80);
+  const sounds = Array.isArray(raw?.sounds) ? raw.sounds : [];
+  const cleaned = sounds.map(s => ({
+    ref:    String(s?.ref ?? "").trim(),
+    name:   String(s?.name ?? "").trim(),
+    volume: Math.max(0, Math.min(1, Number(s?.volume ?? 1))),
+    loop:   !!s?.loop
+  })).filter(s => s.ref.length > 0);
+  return { boardId, name, sounds: cleaned };
+}
+
+// Play the given sound on THIS client. Every play (loop or not) is tracked
+// in _soundBoardSounds so soundBoardStopLocal can find + stop the handle
+// mid-playback. Non-loop sounds also register end/stop listeners so their
+// entry is dropped from the map when they finish naturally — the map stays
+// tidy, and the "is this instance still playing?" check in the UI stays
+// accurate.
+//
+// Returns the Sound handle so the sender can attach its own listeners to
+// update UI state on natural end.
+//
+// Final volume = per-sound (saved in macro) × universal board slider (client
+// setting) × per-client module volume.
+async function soundBoardPlayLocal({ instanceId, path, volume, loop }) {
+  const resolved = resolveDbPath(path);
+  if (!resolved) return null;
+  const rawVolume   = Math.max(0, Math.min(1, Number(volume) || 0));
+  const finalVolume = rawVolume * _getBoardVolume() * getVolume();
+  try {
+    const sound = await foundry.audio.AudioHelper.play(
+      { src: resolved, volume: finalVolume, loop: !!loop, autoplay: true },
+      false
+    );
+    // Race guard: a stop for this instanceId may have arrived while the
+    // Sound was loading. Honour it now and skip registering the handle.
+    if (instanceId && _soundBoardPendingCancellations.has(instanceId)) {
+      _soundBoardPendingCancellations.delete(instanceId);
+      try { sound?.stop?.(); } catch { /* Sound may still be initialising */ }
+      return null;
+    }
+    if (sound && instanceId) {
+      _soundBoardSounds.set(instanceId, { sound, rawVolume });
+      // Auto-cleanup on natural end (non-loop) or explicit stop.
+      if (typeof sound.addEventListener === "function") {
+        const cleanup = () => _soundBoardSounds.delete(instanceId);
+        sound.addEventListener("end",  cleanup);
+        sound.addEventListener("stop", cleanup);
+      }
+    }
+    return sound;
+  } catch (e) {
+    console.warn(`${MODULE_ID} | soundBoardPlayLocal failed for "${resolved}":`, e);
+    return null;
+  }
+}
+
+// Live-adjust every currently-playing sound-board Sound on THIS client
+// (loop or in-flight non-loop) to match a new board-volume value. Called
+// from the slider input handler so the user hears the change immediately
+// instead of on next play.
+function _adjustAllPlayingVolumesLocal(newBoardVolume) {
+  const moduleVolume = getVolume();
+  const clampedBoard = Math.max(0, Math.min(1, Number(newBoardVolume) || 0));
+  for (const entry of _soundBoardSounds.values()) {
+    const target = Math.max(0, Math.min(1, entry.rawVolume ?? 1)) * clampedBoard * moduleVolume;
+    try { if (entry.sound) entry.sound.volume = target; }
+    catch (e) { console.warn(`${MODULE_ID} | live volume adjust failed:`, e); }
+  }
+}
+
+async function soundBoardStopLocal(instanceId) {
+  if (!instanceId) return;
+  const entry = _soundBoardSounds.get(instanceId);
+  if (!entry) {
+    // Play may still be in flight — park the stop until the Sound lands.
+    _soundBoardPendingCancellations.add(instanceId);
+    setTimeout(() => _soundBoardPendingCancellations.delete(instanceId), 30000);
+    return;
+  }
+  try { entry.sound.stop(); } catch { /* Sound may have already stopped */ }
+  _soundBoardSounds.delete(instanceId);
+}
+
+// Nuclear option — stops every currently-playing sound-board Sound on every
+// client. Exposed via the module API so a user with a stuck loop after a
+// browser crash / bad race can hit it from console or a macro:
+//   game.modules.get("joetastic-help-signal").api.stopAllSoundBoardSounds();
+function stopAllSoundBoardSounds() {
+  game.socket.emit(SOCKET, { action: "soundBoardStopAll" });
+  _stopAllSoundBoardSoundsLocal();
+}
+function _stopAllSoundBoardSoundsLocal() {
+  for (const entry of _soundBoardSounds.values()) {
+    try { entry.sound.stop(); } catch { /* ignore */ }
+  }
+  _soundBoardSounds.clear();
+  _soundBoardPendingCancellations.clear();
+}
+
+// Broadcast play/stop over the module socket AND execute locally so the
+// clicker hears it too.
+// Broadcasts play, then plays locally on the sender. Returns the Sender's
+// Sound handle so callers can attach end/stop listeners to update their own
+// UI when the sound finishes naturally (non-loop) or is stopped remotely.
+async function soundBoardPlay({ instanceId, path, volume, loop }) {
+  // Resolve Sequencer DB category paths (e.g. "…enjee") to a concrete leaf
+  // ONCE on the sender's client, then broadcast the resolved path. If we
+  // broadcast the raw category, every client would pick its own random leaf
+  // and users would hear different sounds simultaneously. Concrete paths
+  // pass through resolveDbPath unchanged.
+  const resolved = resolveDbPath(path) ?? path;
+  const payload = { action: "soundBoardPlay", instanceId, path: resolved, volume, loop };
+  game.socket.emit(SOCKET, payload);
+  return await soundBoardPlayLocal(payload);
+}
+
+function soundBoardStop(instanceId) {
+  game.socket.emit(SOCKET, { action: "soundBoardStop", instanceId });
+  soundBoardStopLocal(instanceId);
+}
+
+// Build the macro command string. The whole board (name, sounds list, and
+// stable boardId) is embedded as a JS literal so the macro is self-contained
+// and portable — you can export it and import it into another world, and as
+// long as that world has this module installed it will Just Work.
+//
+// String-concatenated (not a template literal) so backticks or ${} inside
+// user-supplied sound names can't break out of the command.
+function _soundBoardMacroCommand(board) {
+  const json = JSON.stringify(board);
+  return [
+    SOUND_BOARD_MACRO_HEADER,
+    "// Sound board data is embedded below. To edit, drag this macro onto",
+    "// the module's Create Sound Board dialog.",
+    "const board = " + json + ";",
+    "const api = game.modules.get(\"" + MODULE_ID + "\")?.api;",
+    "if (api?.openSoundBoardFromData) api.openSoundBoardFromData(board);",
+    "else ui.notifications?.error?.(\"This macro needs the 'Joetastic Help Signal' module to be installed and enabled.\");"
+  ].join("\n");
+}
+
+async function _createOrUpdateBoardMacro(boardData, editingMacroUuid = null) {
+  const clean = _sanitizeBoardData(boardData);
+  if (clean.sounds.length === 0) {
+    ui.notifications.warn("Add at least one sound before saving.");
+    return null;
+  }
+
+  const command = _soundBoardMacroCommand(clean);
+
+  // Existing macro path: update everything in place so any macro references
+  // the user has already dragged into a hotbar stay live.
+  if (editingMacroUuid) {
+    const existing = await fromUuid(editingMacroUuid);
+    if (existing) {
+      const updates = {
+        command,
+        [`flags.${MODULE_ID}.${SOUND_BOARD_MACRO_TAG}`]: true,
+        [`flags.${MODULE_ID}.${SOUND_BOARD_FLAG}`]:      clean
+      };
+      if (existing.name !== clean.name) updates.name = clean.name;
+      await existing.update(updates);
+      ui.notifications.info(`Updated sound-board macro "${clean.name}".`);
+      return existing;
+    }
+    // Fall through to create if the referenced macro is gone.
+  }
+
+  const macro = await Macro.create({
+    name: clean.name,
+    type: "script",
+    img: "icons/svg/sound.svg",
+    command,
+    flags: {
+      [MODULE_ID]: {
+        [SOUND_BOARD_MACRO_TAG]: true,
+        [SOUND_BOARD_FLAG]: clean
+      }
+    }
+  });
+  if (macro) {
+    ui.notifications.info(`Created sound-board macro "${clean.name}" — drag it to your hotbar.`);
+  }
+  return macro;
+}
+
+// Resolve a macro reference (id, name, or uuid — passed from the macro's own
+// command) to the macro doc, then extract its board data.
+function _resolveBoardMacro(ref) {
+  if (!ref) return null;
+  return game.macros.get(ref)
+      ?? game.macros.getName?.(ref)
+      ?? game.macros.find(m => m.uuid === ref)
+      ?? null;
+}
+
+// Preferred macro entry point (v1.5.1+). The macro's command embeds the board
+// data as a JS literal and calls into this function directly, so the macro is
+// self-contained — export it, hand it to a friend, they import it, it works
+// (as long as their world has this module installed and enabled).
+async function openSoundBoardFromData(board) {
+  const clean = _sanitizeBoardData(board);
+  if (clean.sounds.length === 0) {
+    ui.notifications.warn("This sound board has no sounds configured.");
+    return null;
+  }
+
+  const boardId = clean.boardId;
+
+  // Single-sound shortcut: skip the grid window and just play — the macro
+  // becomes a one-shot trigger. Uses a stable per-macro instance id so a
+  // second click while the sound is still playing (loop OR mid-non-loop)
+  // stops it; once the sound has ended naturally the map entry is gone,
+  // so the next click starts fresh.
+  if (clean.sounds.length === 1) {
+    const sound = clean.sounds[0];
+    const instanceId = `single-${boardId}`;
+    if (_soundBoardSounds.has(instanceId)) {
+      soundBoardStop(instanceId);
+    } else {
+      soundBoardPlay({
+        instanceId,
+        path: sound.ref,
+        volume: sound.volume,
+        loop: !!sound.loop
+      });
+    }
+    return null;
+  }
+
+  const app = new SoundBoardPlayerApp({}, { boardData: clean });
+  app.render(true);
+  return app;
+}
+
+// Back-compat entry point for v1.5.0 macros whose command still calls
+// openSoundBoard(macroId). We look up the macro by id, pull the board data
+// out of its flag, and delegate to the data-driven path. Uses macro.id as
+// the boardId when the flag doesn't carry one, matching v1.5.0 behaviour so
+// any per-user volume flag they saved stays keyed the same way.
+async function openSoundBoard(ref) {
+  const macro = _resolveBoardMacro(ref);
+  const data = macro?.getFlag(MODULE_ID, SOUND_BOARD_FLAG);
+  if (!data) {
+    ui.notifications.error("Sound board data not found on this macro.");
+    return null;
+  }
+  return openSoundBoardFromData({ boardId: data.boardId ?? macro.id, ...data });
+}
+
+function openSoundBoardSetup() {
+  const app = new SoundBoardSetupApp();
+  app.render(true);
+  return app;
+}
+
+// Setup dialog. Registered as a settings menu button; also opened via the API.
+class SoundBoardSetupApp extends FormApplication {
+  constructor(options = {}, initial = null) {
+    super({}, options);
+    // Loaded board data — mutated as the user edits rows. Sanitized on save.
+    const seed = _sanitizeBoardData(initial ?? { name: "Sound Board", sounds: [] });
+    this._board = seed;
+    // Tracks the macro currently being edited/generated. Set on drop-in or
+    // after a successful Generate. Subsequent Generate clicks update this
+    // macro in place instead of creating a new one, so the hotbar reference
+    // the user already dragged out stays live.
+    this._currentMacroUuid = null;
+  }
+
+  static get defaultOptions() {
+    return foundry.utils.mergeObject(super.defaultOptions, {
+      id: `${MODULE_ID}-sound-board-setup`,
+      title: "Sound Board — Setup",
+      template: `modules/${MODULE_ID}/templates/sound-board-setup.hbs`,
+      classes: [MODULE_ID],
+      width: 720,
+      height: "auto",
+      resizable: true,
+      submitOnChange: false,
+      submitOnClose: false,
+      closeOnSubmit: false
+    });
+  }
+
+  async getData() {
+    const sounds = this._board.sounds.length
+      ? this._board.sounds
+      : [{ ref: "", name: "", volume: 1, loop: false }];
+    let currentMacro = null;
+    if (this._currentMacroUuid) {
+      const doc = await fromUuid(this._currentMacroUuid).catch(() => null);
+      if (doc) currentMacro = { uuid: doc.uuid, name: doc.name, img: doc.img };
+      else this._currentMacroUuid = null;
+    }
+    return {
+      boardName: this._board.name,
+      sounds: sounds.map(s => ({ ...s, volumePercent: Math.round((s.volume ?? 1) * 100) })),
+      currentMacro,
+      // Only GMs can meaningfully browse Foundry's data / the Forge Assets
+      // Library from a FilePicker — hide the browse button for players.
+      isGM: !!game.user?.isGM
+    };
+  }
+
+  activateListeners(html) {
+    super.activateListeners(html);
+    const root = html?.[0] ?? html;
+    if (!root) return;
+
+    // Read the form state back into this._board so re-render doesn't lose
+    // in-progress edits.
+    const readForm = () => {
+      const name = root.querySelector('[name="boardName"]')?.value ?? "";
+      const rows = Array.from(root.querySelectorAll(".jhs-sb-row"));
+      const sounds = rows.map(row => ({
+        ref:    row.querySelector(".jhs-sb-ref")?.value ?? "",
+        name:   row.querySelector(".jhs-sb-name")?.value ?? "",
+        volume: Number(row.querySelector(".jhs-sb-volume")?.value ?? 1),
+        loop:   !!row.querySelector(".jhs-sb-loop")?.checked
+      }));
+      this._board = { name, sounds };
+    };
+
+    // Volume slider — live label update. Doesn't need to re-render.
+    root.querySelectorAll(".jhs-sb-row").forEach(row => {
+      const slider = row.querySelector(".jhs-sb-volume");
+      const label  = row.querySelector(".jhs-sb-volume-label");
+      slider?.addEventListener("input", () => {
+        if (label) label.textContent = `${Math.round((Number(slider.value) || 0) * 100)}%`;
+      });
+    });
+
+    // Preview a row's sound locally (never broadcast). Reads the current
+    // ref+volume values so previews reflect unsaved edits in the form.
+    root.querySelectorAll(".jhs-sb-preview").forEach(btn => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const row = btn.closest(".jhs-sb-row");
+        if (!row) return;
+        const ref    = row.querySelector(".jhs-sb-ref")?.value ?? "";
+        const volume = Number(row.querySelector(".jhs-sb-volume")?.value ?? 1);
+        _soundBoardPreviewLocal(ref, volume);
+      });
+    });
+
+    // Delete row.
+    root.querySelectorAll(".jhs-sb-delete").forEach(btn => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        readForm();
+        const idx = Number(btn.closest(".jhs-sb-row")?.dataset.idx ?? -1);
+        if (idx >= 0) this._board.sounds.splice(idx, 1);
+        this.render(true);
+      });
+    });
+
+    // Add row.
+    root.querySelector(".jhs-sb-add-row")?.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      readForm();
+      this._board.sounds.push({ ref: "", name: "", volume: 1, loop: false });
+      this.render(true);
+    });
+
+    // Browse-for-audio-file button on each row. Only rendered for GMs (see
+    // the template's {{#if ../isGM}} gate), but we double-check here in case
+    // a partially-rendered HTML from a permission flip left the button in
+    // place. On Forge, when the field is empty, default to the user's Forge
+    // Assets Library ("forgevtt" source) instead of the local Data root.
+    // If the field already contains a path, FilePicker auto-detects the
+    // source from the URL, which is friendlier than forcing forgevtt.
+    root.querySelectorAll(".jhs-sb-browse").forEach(btn => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        if (!game.user?.isGM) return;
+        const input = btn.closest("td")?.querySelector(".jhs-sb-ref");
+        if (!input) return;
+
+        const options = {
+          type: "audio",
+          current: input.value || "",
+          callback: (path) => { input.value = path; }
+        };
+        if (!options.current && window.ForgeVTT?.usingTheForge) {
+          options.activeSource = "forgevtt";
+        }
+        new FilePicker(options).render(true);
+      });
+    });
+
+    // Close + Generate. Generate does NOT close the dialog — it (re)creates
+    // the macro and rerenders so the draggable icon is visible for the user
+    // to drop into their hotbar. Subsequent clicks update the same macro.
+    root.querySelector(".jhs-sb-cancel")?.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      this.close();
+    });
+    root.querySelector(".jhs-sb-generate")?.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      readForm();
+      const macro = await _createOrUpdateBoardMacro(this._board, this._currentMacroUuid);
+      if (macro) {
+        this._currentMacroUuid = macro.uuid;
+        this.render(true);
+      }
+    });
+
+    // Wire drag on the generated macro icon so it lands on the hotbar as a
+    // real macro reference (Foundry parses the {type,uuid} JSON payload).
+    bindDragTargets(html, ".jhs-macro-drag");
+
+    // Whole-dialog drop target so users can drop a macro anywhere on it.
+    // Everything here is guarded so dropping arbitrary items/actors/text on
+    // the dialog just no-ops or warns, never throws.
+    root.addEventListener("dragover", (ev) => { ev.preventDefault(); });
+    root.addEventListener("drop", async (ev) => {
+      ev.preventDefault();
+      let payload;
+      try {
+        const raw = ev.dataTransfer?.getData?.("text/plain");
+        if (!raw) return;
+        payload = JSON.parse(raw);
+      } catch { return; }
+
+      if (payload?.type !== "Macro") {
+        if (payload?.type) ui.notifications.warn("Only sound-board macros can be dropped here.");
+        return;
+      }
+
+      let macro = null;
+      try {
+        if (payload.uuid)     macro = await fromUuid(payload.uuid);
+        else if (payload.id)  macro = game.macros.get(payload.id);
+      } catch (e) {
+        console.warn(`${MODULE_ID} | sound-board drop: macro lookup failed:`, e);
+      }
+      if (!macro) {
+        ui.notifications.warn("Couldn't resolve the dropped macro.");
+        return;
+      }
+
+      if (!_isSoundBoardMacro(macro)) {
+        ui.notifications.warn(`"${macro.name}" isn't a Joetastic sound board macro.`);
+        return;
+      }
+
+      const data = macro.getFlag(MODULE_ID, SOUND_BOARD_FLAG);
+      // v1.5.0 macros used macro.id as the implicit boardId. When editing one,
+      // keep that id so any per-user board-volume flag the player set stays
+      // valid across the upgrade to the data-embedded command format.
+      const seed = data
+        ? { ...data, boardId: data.boardId ?? macro.id }
+        : { boardId: macro.id, name: macro.name, sounds: [] };
+      this._board = _sanitizeBoardData(seed);
+      this._currentMacroUuid = macro.uuid;
+      this.render(true);
+    });
+  }
+
+  // Foundry's FormApplication insists on this, but we handle save via a
+  // button click so the form-submit path is a no-op.
+  async _updateObject() {}
+}
+
+// Player: opened by the generated macro. Grid of buttons; broadcasts play/stop
+// via the module socket so every client hears the sounds.
+class SoundBoardPlayerApp extends Application {
+  constructor(options = {}, { boardData = null } = {}) {
+    super(options);
+    // _sanitizeBoardData mints a boardId if the incoming data didn't carry
+    // one, so this._boardId is always populated exactly once from the board.
+    this._board = _sanitizeBoardData(boardData ?? { name: "Sound Board", sounds: [] });
+    this._boardId = this._board.boardId;
+    // buttonIndex -> instanceId of the sound this app is currently tracking.
+    this._playing = new Map();
+    // Sounds keep playing after this app is closed (by design). When the
+    // user reopens the board, we rehydrate _playing from the global
+    // _soundBoardSounds registry so the buttons show PLAYING again and
+    // clicking them stops the sound properly.
+    this._reconcilePlaying();
+    // Personal, persistent scalar applied to every sound this player plays.
+    // Client-scoped setting shared by all sound boards on this machine.
+    this._boardVolume = _getBoardVolume();
+    // Locate the macro this data came from so right-click edits can persist
+    // back to it. v1.5.1+ macros carry the boardId in flags.soundBoard;
+    // v1.5.0 macros used their doc id as the implicit boardId (fall back to
+    // that if the flag doesn't match).
+    this._sourceMacro =
+      game.macros.find(m => m.getFlag(MODULE_ID, SOUND_BOARD_FLAG)?.boardId === this._boardId)
+      ?? game.macros.get(this._boardId)
+      ?? null;
+    // Popover state + debounced persist timer.
+    this._rowMenu = null;
+    this._persistTimer = null;
+  }
+
+  static get defaultOptions() {
+    return foundry.utils.mergeObject(super.defaultOptions, {
+      id: `${MODULE_ID}-sound-board-player`,
+      title: "Sound Board",
+      template: `modules/${MODULE_ID}/templates/sound-board-player.hbs`,
+      classes: [MODULE_ID],
+      width: 520,
+      height: "auto",
+      resizable: true,
+      popOut: true
+    });
+  }
+
+  get title() { return this._board.name || "Sound Board"; }
+
+  async getData() {
+    return {
+      boardName: this._board.name,
+      hasSounds: this._board.sounds.length > 0,
+      boardVolume: this._boardVolume,
+      boardVolumePercent: Math.round(this._boardVolume * 100),
+      // Owners can right-click to edit and see the New Sound button; non-
+      // owners just get a play grid (edits wouldn't persist for them anyway).
+      isOwner: !!this._sourceMacro?.isOwner,
+      isGM: !!game.user?.isGM,
+      sounds: this._board.sounds.map(s => ({
+        ...s,
+        displayName:   _soundBoardDisplayName(s),
+        volumePercent: Math.round((s.volume ?? 1) * 100)
+      }))
+    };
+  }
+
+  activateListeners(html) {
+    super.activateListeners(html);
+    const root = html?.[0] ?? html;
+    if (!root) return;
+
+    // Board volume slider. Label updates continuously; the persistent write
+    // only fires on `change` (slider release) to avoid spamming setFlag.
+    // Live-adjusts any currently-playing loops from this board on this client.
+    const slider = root.querySelector(".jhs-sb-board-volume");
+    const label  = root.querySelector(".jhs-sb-board-volume-label");
+    if (slider) {
+      slider.addEventListener("input", () => {
+        const v = Math.max(0, Math.min(1, Number(slider.value) || 0));
+        this._boardVolume = v;
+        if (label) label.textContent = `${Math.round(v * 100)}%`;
+        _adjustAllPlayingVolumesLocal(v);
+      });
+      slider.addEventListener("change", () => {
+        _setBoardVolume(this._boardVolume)
+          .catch(e => console.warn(`${MODULE_ID} | board volume persist failed:`, e));
+      });
+    }
+
+    // "New Sound" button — appends an empty entry and opens the edit popover
+    // in add mode. Owner-only (template gates it too, but be defensive here).
+    // Explicitly closes any prior menu FIRST so that if a previous add-mode
+    // popover left an empty placeholder in the sounds array, it gets spliced
+    // out before we push our new placeholder — otherwise the indices we
+    // capture next would drift when close fires later.
+    root.querySelector(".jhs-sb-new-sound")?.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      if (!this._sourceMacro?.isOwner) return;
+      this._closeRowMenu();
+      this._board.sounds.push({ ref: "", name: "", volume: 1, loop: false });
+      const idx = this._board.sounds.length - 1;
+      this._openRowMenu(idx, ev, { mode: "add" });
+    });
+
+    const buttons = root.querySelectorAll(".jhs-sb-play");
+    buttons.forEach(btn => {
+      // Right-click → inline edit popover (owners only, since edits persist).
+      btn.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        if (!this._sourceMacro?.isOwner) return;
+        const idx = Number(btn.dataset.idx);
+        if (Number.isFinite(idx)) this._openRowMenu(idx, ev);
+      });
+
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const idx = Number(btn.dataset.idx);
+        const entry = this._board.sounds[idx];
+        if (!entry) return;
+
+        // Toggle off if this button's sound is currently playing (loop OR a
+        // still-in-flight non-loop). Guarantees a second click of the same
+        // button always means "stop."
+        const currentInstance = this._playing.get(idx);
+        if (currentInstance) {
+          soundBoardStop(currentInstance);
+          this._playing.delete(idx);
+          this._setButtonPlaying(btn, false);
+          return;
+        }
+
+        // Multiple sounds can play concurrently — just start this one. Only
+        // this same button being clicked again will stop it (toggle-off
+        // branch above), and each other button manages its own instance.
+        const instanceId = `${this._boardId}-${idx}-${foundry.utils.randomID(6)}`;
+        this._playing.set(idx, instanceId);
+        this._setButtonPlaying(btn, true);
+
+        const sound = await soundBoardPlay({
+          instanceId,
+          path: entry.ref,
+          volume: entry.volume,
+          loop: !!entry.loop
+        });
+
+        // Clear the button visual when the local Sound emits "end" (non-
+        // loop finishes) or "stop" (someone stopped it — us, another user
+        // via broadcast, or the browser cleanup). Guard against races where
+        // the same idx has since been used by a fresher play.
+        if (typeof sound?.addEventListener === "function") {
+          const cleanup = () => {
+            if (this._playing.get(idx) !== instanceId) return;
+            this._playing.delete(idx);
+            const laterBtn = this.element?.[0]?.querySelector(`.jhs-sb-play[data-idx="${idx}"]`);
+            this._setButtonPlaying(laterBtn, false);
+          };
+          sound.addEventListener("end",  cleanup);
+          sound.addEventListener("stop", cleanup);
+        }
+      });
+    });
+
+    // Re-renders (New Sound, cancelled add, etc.) rebuild the button DOM, so
+    // any loops still in-flight need their PLAYING visual restored — they're
+    // tracked in this._playing which survives re-render.
+    for (const idx of this._playing.keys()) {
+      const btn = root.querySelector(`.jhs-sb-play[data-idx="${idx}"]`);
+      this._setButtonPlaying(btn, true);
+    }
+  }
+
+  // Stop every sound this window is tracking (loops and any in-flight non-
+  // loops). Optionally resets the visual state of the corresponding buttons
+  // if a DOM root is passed (during a click).
+  _stopAllSounds(root = null) {
+    for (const [otherIdx, instanceId] of this._playing.entries()) {
+      soundBoardStop(instanceId);
+      if (root) {
+        const btn = root.querySelector(`.jhs-sb-play[data-idx="${otherIdx}"]`);
+        this._setButtonPlaying(btn, false);
+      }
+    }
+    this._playing.clear();
+  }
+
+  // Rebuild _playing by scanning the global registry for instanceIds that
+  // belong to this board. Called from the constructor so a reopened board
+  // resumes tracking any sounds that were still playing after the previous
+  // close. Also attaches cleanup listeners so those sounds clear the button
+  // visuals when they eventually end (naturally or via stop).
+  _reconcilePlaying() {
+    const prefix = `${this._boardId}-`;
+    for (const [instanceId, entry] of _soundBoardSounds.entries()) {
+      if (!instanceId.startsWith(prefix)) continue;
+      const remainder = instanceId.slice(prefix.length);
+      const dash = remainder.indexOf("-");
+      if (dash < 0) continue;
+      const idx = Number(remainder.slice(0, dash));
+      if (!Number.isFinite(idx)) continue;
+      this._playing.set(idx, instanceId);
+
+      if (entry?.sound && typeof entry.sound.addEventListener === "function") {
+        const cleanup = () => {
+          if (this._playing.get(idx) !== instanceId) return;
+          this._playing.delete(idx);
+          const laterBtn = this.element?.[0]?.querySelector(`.jhs-sb-play[data-idx="${idx}"]`);
+          this._setButtonPlaying(laterBtn, false);
+        };
+        entry.sound.addEventListener("end",  cleanup);
+        entry.sound.addEventListener("stop", cleanup);
+      }
+    }
+  }
+
+  _setButtonPlaying(btn, on) {
+    if (!btn) return;
+    const state = btn.querySelector(".jhs-sb-btn-state");
+    if (on) {
+      btn.classList.add("jhs-sb-playing");
+      // Reveal via visibility so the button doesn't grow — the span was
+      // reserving its space with visibility:hidden.
+      if (state) state.style.visibility = "";
+      Object.assign(btn.style, { background: "#3f0f0f", borderColor: "#fca5a5" });
+    } else {
+      btn.classList.remove("jhs-sb-playing");
+      if (state) state.style.visibility = "hidden";
+      Object.assign(btn.style, { background: "#0a0a0f", borderColor: "#dc2626" });
+    }
+  }
+
+  // Live-refresh a single grid button's label/meta after an inline edit,
+  // so we don't need a full re-render (which would kill scroll position and
+  // reset the loop-play visuals).
+  _refreshButton(idx) {
+    const root = this.element?.[0];
+    if (!root) return;
+    const btn = root.querySelector(`.jhs-sb-play[data-idx="${idx}"]`);
+    if (!btn) return;
+    const entry = this._board.sounds[idx];
+    if (!entry) return;
+    const displayName = _soundBoardDisplayName(entry);
+    const volumePct   = Math.round((entry.volume ?? 1) * 100);
+    const nameSpan = btn.querySelector(".jhs-sb-btn-name");
+    const metaSpan = btn.querySelector(".jhs-sb-btn-meta");
+    if (nameSpan) nameSpan.textContent = displayName;
+    if (metaSpan) metaSpan.textContent = `${volumePct}%${entry.loop ? " · LOOP" : ""}`;
+    btn.dataset.loop = String(entry.loop);
+    btn.title = displayName;
+  }
+
+  // Debounced write of the whole board back to the source macro. Any inline
+  // edit fires this; multiple rapid edits coalesce into one macro update.
+  _persistBoardChanges() {
+    if (!this._sourceMacro?.isOwner) return;
+    clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => {
+      _createOrUpdateBoardMacro(this._board, this._sourceMacro.uuid)
+        .catch(e => console.warn(`${MODULE_ID} | inline sound edit persist failed:`, e));
+    }, 300);
+  }
+
+  _openRowMenu(idx, ev, { mode = "edit" } = {}) {
+    this._closeRowMenu();
+    const entry = this._board.sounds[idx];
+    if (!entry) return;
+
+    const popover = document.createElement("div");
+    popover.className = "jhs-sb-rowmenu";
+    // Foundry Applications assign an inline zIndex that climbs each time a
+    // window is focused (via Application._maxZ). Set the popover ABOVE the
+    // player app's current zIndex, with a hard floor well above any other
+    // typical Foundry window.
+    const appZ = Number(this.element?.[0]?.style?.zIndex) || 0;
+    const popoverZ = Math.max(appZ + 5, 10000);
+    Object.assign(popover.style, {
+      position: "fixed",
+      left:  `${(ev.clientX ?? 0) + 6}px`,
+      top:   `${(ev.clientY ?? 0) + 6}px`,
+      zIndex: String(popoverZ),
+      minWidth: "320px",
+      padding: "0.65em 0.8em",
+      borderRadius: "8px",
+      border: "1px solid #dc2626",
+      background: "#0a0a0f",
+      color: "#f5f5f4",
+      boxShadow: "0 6px 22px rgba(0,0,0,0.5)"
+    });
+
+    const isGM  = !!game.user?.isGM;
+    const title = mode === "add" ? "Add new sound" : "Edit sound";
+    popover.innerHTML = `
+      <div style="font-weight:700; font-size:0.9em; margin-bottom:0.4em;">${title}</div>
+      <div style="margin-bottom:0.5em;">
+        <label style="display:block; font-size:0.8em; opacity:0.8; margin-bottom:0.15em;">Sound Reference</label>
+        <div style="display:flex; align-items:center; gap:0.25em; width:100%;">
+          <input type="text" class="jhs-rm-ref"
+                 placeholder="Sequencer DB path or file path"
+                 style="flex:1 1 0; min-width:0; width:100%; box-sizing:border-box;"/>
+          ${isGM ? `
+            <button type="button" class="jhs-rm-browse" title="Browse for audio file"
+                    style="flex:0 0 28px; width:28px; height:28px; padding:0; line-height:1;
+                           display:inline-flex; align-items:center; justify-content:center;">
+              <i class="fas fa-folder-open"></i>
+            </button>` : ""}
+        </div>
+      </div>
+      <div style="margin-bottom:0.5em;">
+        <label style="display:block; font-size:0.8em; opacity:0.8; margin-bottom:0.15em;">Display Name</label>
+        <input type="text" class="jhs-rm-name" style="width:100%; box-sizing:border-box;"/>
+      </div>
+      <div style="margin-bottom:0.5em;">
+        <label style="display:block; font-size:0.8em; opacity:0.8; margin-bottom:0.15em;">Volume</label>
+        <div style="display:flex; align-items:center; gap:0.4em;">
+          <input type="range" class="jhs-rm-volume" min="0" max="1" step="0.05"
+                 style="flex:1 1 0; min-width:0;"/>
+          <span class="jhs-rm-vol-label" style="min-width:2.75em; text-align:right; font-size:0.85em;"></span>
+        </div>
+      </div>
+      <div style="margin-bottom:0.55em;">
+        <label style="display:inline-flex; align-items:center; gap:0.4em; font-size:0.9em;">
+          <input type="checkbox" class="jhs-rm-loop"/> Loop
+        </label>
+      </div>
+      <div style="display:flex; justify-content:flex-end;">
+        <button type="button" class="jhs-rm-close" style="padding:0.25em 0.75em;">Close</button>
+      </div>
+    `;
+    document.body.appendChild(popover);
+
+    // Populate values programmatically so user-typed strings never need HTML
+    // escaping — no injection risk from a maliciously-named sound.
+    const refInput  = popover.querySelector(".jhs-rm-ref");
+    const browseBtn = popover.querySelector(".jhs-rm-browse");
+    const nameInput = popover.querySelector(".jhs-rm-name");
+    const volSlider = popover.querySelector(".jhs-rm-volume");
+    const volLabel  = popover.querySelector(".jhs-rm-vol-label");
+    const loopBox   = popover.querySelector(".jhs-rm-loop");
+    const closeBtn  = popover.querySelector(".jhs-rm-close");
+    refInput.value  = entry.ref ?? "";
+    nameInput.value = entry.name ?? "";
+    volSlider.value = String(entry.volume ?? 1);
+    volLabel.textContent = `${Math.round((entry.volume ?? 1) * 100)}%`;
+    loopBox.checked = !!entry.loop;
+
+    const commit = () => {
+      entry.ref    = (refInput.value ?? "").trim();
+      entry.name   = nameInput.value ?? "";
+      entry.volume = Math.max(0, Math.min(1, Number(volSlider.value) || 0));
+      entry.loop   = !!loopBox.checked;
+      // Only refresh the button when it exists in the DOM. In "add" mode
+      // the button is created on popover close via re-render, so refresh
+      // here would no-op — the re-render will build it from board data.
+      if (mode !== "add") this._refreshButton(idx);
+      this._persistBoardChanges();
+    };
+
+    refInput.addEventListener("input", commit);
+    nameInput.addEventListener("input", commit);
+    volSlider.addEventListener("input", () => {
+      volLabel.textContent = `${Math.round((Number(volSlider.value) || 0) * 100)}%`;
+      commit();
+    });
+    loopBox.addEventListener("change", commit);
+    closeBtn.addEventListener("click", () => this._closeRowMenu());
+
+    // Browse button — GM-only, mirrors the setup dialog's picker behaviour.
+    browseBtn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!game.user?.isGM) return;
+      const options = {
+        type: "audio",
+        current: refInput.value || "",
+        callback: (path) => { refInput.value = path; commit(); }
+      };
+      if (!options.current && window.ForgeVTT?.usingTheForge) {
+        options.activeSource = "forgevtt";
+      }
+      new FilePicker(options).render(true);
+    });
+
+    // Dismiss on click-outside or Escape. Delay attaching so the current
+    // right-click / New-Sound click doesn't immediately count as outside.
+    const outsideClick = (e) => {
+      // Ignore clicks inside the FilePicker window that the browse button
+      // spawned — otherwise picking a file dismisses the popover.
+      if (popover.contains(e.target)) return;
+      if (e.target.closest?.(".filepicker")) return;
+      this._closeRowMenu();
+    };
+    const escKey = (e) => {
+      if (e.key === "Escape") this._closeRowMenu();
+    };
+    setTimeout(() => {
+      document.addEventListener("mousedown", outsideClick);
+      document.addEventListener("keydown", escKey);
+    }, 0);
+
+    this._rowMenu = { popover, outsideClick, escKey, idx, mode };
+    // In add mode the ref is the first thing the user needs; in edit mode
+    // start on the name field (most common tweak).
+    const focusTarget = mode === "add" ? refInput : nameInput;
+    focusTarget.focus();
+    focusTarget.select();
+  }
+
+  _closeRowMenu() {
+    if (!this._rowMenu) return;
+    const { popover, outsideClick, escKey, idx, mode } = this._rowMenu;
+    document.removeEventListener("mousedown", outsideClick);
+    document.removeEventListener("keydown", escKey);
+    popover.remove();
+    this._rowMenu = null;
+
+    if (mode === "add") {
+      // Discard the placeholder entry if the user closed without entering
+      // a sound reference. Either way, re-render so the grid reflects the
+      // final state (new button appearing, or the placeholder vanishing).
+      const entry = this._board.sounds[idx];
+      if (!entry?.ref?.trim()) {
+        this._board.sounds.splice(idx, 1);
+      }
+      this.render(false);
+    }
+  }
+
+  async close(options) {
+    this._closeRowMenu();
+    // Flush any pending debounced write immediately so a fast close doesn't
+    // drop the user's last edit.
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+      if (this._sourceMacro?.isOwner) {
+        try { await _createOrUpdateBoardMacro(this._board, this._sourceMacro.uuid); }
+        catch (e) { console.warn(`${MODULE_ID} | inline edit final persist failed:`, e); }
+      }
+    }
+    // Sounds intentionally keep playing after the app closes. Reopening the
+    // board rehydrates the playing state via _reconcilePlaying in the
+    // constructor, so the user can find and stop any lingering loops. If
+    // something needs killed without reopening, the API method
+    // `stopAllSoundBoardSounds()` broadcasts a kill to every client.
+    return super.close(options);
+  }
 }
 
 Hooks.once("init", () => {
@@ -1539,6 +2721,26 @@ Hooks.once("init", () => {
     restricted: false
   });
 
+  game.settings.registerMenu(MODULE_ID, "soundBoardSetup", {
+    name: "Create Sound Board",
+    label: "Open Sound Board Setup",
+    hint: "Configure a list of sounds (name, volume, loop) and generate a macro that opens a click-to-play grid. Sounds broadcast to all clients when played. Drag an existing sound-board macro onto the setup dialog to edit it.",
+    icon: "fas fa-music",
+    type: SoundBoardSetupApp,
+    restricted: false
+  });
+
+  // Hidden client-scoped setting: the sound-board slider value. One number
+  // per client, shared by every sound board (no per-board flags, no orphan
+  // risk when boards get deleted).
+  game.settings.register(MODULE_ID, "soundBoardVolume", {
+    scope: "client",
+    config: false,
+    type: Number,
+    range: { min: 0, max: 1, step: 0.05 },
+    default: 1
+  });
+
   // NOTE: Band Mate settings (enabled/sound/animation/hue/saturate/
   // brightness/rainbow/trigger toggles + fallback animation) are NOT
   // registered as Foundry settings. They live on the User document as flags
@@ -1592,6 +2794,22 @@ Hooks.once("ready", () => {
       return;
     }
 
+    // Sound board play/stop. Broadcast to every client — each plays locally
+    // so their own volume slider scales it and stops route to their own
+    // Sound handle.
+    if (data?.action === "soundBoardPlay") {
+      await soundBoardPlayLocal(data);
+      return;
+    }
+    if (data?.action === "soundBoardStop") {
+      await soundBoardStopLocal(data.instanceId);
+      return;
+    }
+    if (data?.action === "soundBoardStopAll") {
+      _stopAllSoundBoardSoundsLocal();
+      return;
+    }
+
     if (!game.user.isGM) return;
 
     if (data?.action === "apply") {
@@ -1618,6 +2836,18 @@ Hooks.once("ready", () => {
       try {
         const macro = await fromUuid(data.macroUuid);
         if (macro && macro.img !== data.img) await macro.update({ img: data.img });
+      } catch (e) {
+        if (!/does not exist/i.test(e?.message ?? "")) console.warn(e);
+      }
+      return;
+    }
+
+    // Delegated full Band Mate macro update (name/command/img/mate-flag) —
+    // used when a user changes their mate selection but doesn't own the doc.
+    if (data?.action === "updateBandMateMacro") {
+      try {
+        const macro = await fromUuid(data.macroUuid);
+        if (macro) await macro.update(data.updates ?? {});
       } catch (e) {
         if (!/does not exist/i.test(e?.message ?? "")) console.warn(e);
       }
@@ -1916,26 +3146,20 @@ Hooks.once("ready", () => {
     catch (e) { console.error(`${MODULE_ID} | cleanupLegacyBandMateMacros threw:`, e); }
 
     for (const user of game.users) {
-      for (const mate of BAND_MATES) {
-        try {
-          await ensureBandMateMacro(user, mate);
-        } catch (e) {
-          console.error(`${MODULE_ID} | ensureBandMateMacro(${user.name}, ${mate.key}) threw:`, e);
-        }
+      try {
+        await ensureBandMateMacro(user);
+      } catch (e) {
+        console.error(`${MODULE_ID} | ensureBandMateMacro(${user.name}) threw:`, e);
       }
     }
   }
 
   // Late-join safety net: if a user logs in after the GM's ready sweep ran,
-  // give them the full set of Band Mate macros on the fly.
+  // give them their single Band Mate macro on the fly.
   Hooks.on("userConnected", (user, connected) => {
     if (!game.user.isGM || !connected) return;
-    (async () => {
-      for (const mate of BAND_MATES) {
-        try { await ensureBandMateMacro(user, mate); }
-        catch (e) { console.warn(`${MODULE_ID} | userConnected ensureBandMateMacro failed:`, e); }
-      }
-    })();
+    ensureBandMateMacro(user)
+      .catch(e => console.warn(`${MODULE_ID} | userConnected ensureBandMateMacro failed:`, e));
   });
 
   game.modules.get(MODULE_ID).api = {
@@ -1945,13 +3169,23 @@ Hooks.once("ready", () => {
     ensureItem,
     ensureAll,
     toggleBandMate,
+    setUserSelectedMate,
     turnOffAllBandMates,
     openBandMateConfigDialog,
+    openSoundBoard,
+    openSoundBoardFromData,
+    openSoundBoardSetup,
+    stopAllSoundBoardSounds,
     bandMates: BAND_MATES,
     variants: VARIANTS
   };
 
   ensureAll();
+
+  // One-time per-user sweep of orphaned per-board volume flags left over from
+  // earlier sound-board versions. Cheap no-op if the user has none.
+  _cleanupLegacyBoardVolumeFlags()
+    .catch(e => console.warn(`${MODULE_ID} | legacy board-volume cleanup failed:`, e));
 
   // Trigger the apply flow when a "Help" item is used from a sheet. Reads
   // the variant from the item's flag. Debounced to avoid firing twice if

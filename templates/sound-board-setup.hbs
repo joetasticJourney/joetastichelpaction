@@ -1,0 +1,117 @@
+<form class="jhs-sound-board-setup" autocomplete="off" style="padding:0.5em 0.25em;">
+  <p style="margin:0 0 0.75em 0; opacity:0.85;">
+    Configure a sound board. Click <b>Generate Macro</b> to create/update the macro, then drag its icon
+    (below) into your hotbar. Drop an existing sound-board macro anywhere on this dialog to edit it.
+  </p>
+
+  <div class="form-group">
+    <label>Board Name</label>
+    <div class="form-fields">
+      <input type="text" name="boardName" value="{{boardName}}"
+             placeholder="e.g. Party Ambience"
+             style="width:100%; box-sizing:border-box;"/>
+    </div>
+  </div>
+
+  {{#if currentMacro}}
+    <div class="jhs-sb-current" style="margin:0.5em 0; padding:0.6em 0.8em;
+         border:2px dashed #22c55e; border-radius:8px;
+         display:flex; align-items:center; gap:0.9em;">
+      <div class="jhs-macro-drag" draggable="true"
+           data-uuid="{{currentMacro.uuid}}" data-drag-type="Macro"
+           style="flex:0 0 auto; cursor:grab; -webkit-user-drag:element; user-select:none;
+                  display:flex; flex-direction:column; align-items:center;">
+        <img src="{{currentMacro.img}}" alt="{{currentMacro.name}}" draggable="false"
+             style="width:56px; height:56px; border:2px solid #22c55e; border-radius:8px;
+                    background:#0a0a0f; pointer-events:none;"/>
+        <div style="margin-top:0.25em; font-size:0.8em; font-weight:600; pointer-events:none;
+                    max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          {{currentMacro.name}}
+        </div>
+      </div>
+      <div style="flex:1 1 auto; font-size:0.9em; line-height:1.35;">
+        <div><b>Drag this icon into your hotbar.</b></div>
+        <div style="opacity:0.8;">Clicking Generate Macro again updates this same macro.</div>
+      </div>
+    </div>
+  {{/if}}
+
+  <table class="jhs-sb-rows" style="width:100%; border-collapse:collapse; table-layout:fixed;">
+    <thead>
+      <tr style="text-align:left; font-size:0.9em; opacity:0.85;">
+        <th style="width:5%;"></th>
+        <th style="width:37%;">Sound Reference</th>
+        <th style="width:22%;">Name</th>
+        <th style="width:22%;">Volume</th>
+        <th style="width:6%; text-align:center;">Loop</th>
+        <th style="width:8%;"></th>
+      </tr>
+    </thead>
+    <tbody class="jhs-sb-tbody">
+      {{#each sounds}}
+        <tr class="jhs-sb-row" data-idx="{{@index}}">
+          <td style="text-align:center; padding-right:0.35em;">
+            <button type="button" class="jhs-sb-preview" title="Preview this sound (local only)"
+                    style="width:28px; height:28px; padding:0; line-height:1;
+                           display:inline-flex; align-items:center; justify-content:center;
+                           color:#22c55e;">
+              <i class="fas fa-play"></i>
+            </button>
+          </td>
+          <td style="padding-right:0.35em;">
+            <div style="display:flex; align-items:center; gap:0.25em; width:100%;">
+              <input type="text" class="jhs-sb-ref" value="{{this.ref}}"
+                     placeholder="Sequencer DB path or file path"
+                     style="flex:1 1 0; min-width:0; width:100%; box-sizing:border-box;"/>
+              {{#if ../isGM}}
+                <button type="button" class="jhs-sb-browse" title="Browse for audio file"
+                        style="flex:0 0 28px; width:28px; height:28px; padding:0; line-height:1;
+                               display:inline-flex; align-items:center; justify-content:center;">
+                  <i class="fas fa-folder-open"></i>
+                </button>
+              {{/if}}
+            </div>
+          </td>
+          <td style="padding-right:0.35em;">
+            <input type="text" class="jhs-sb-name" value="{{this.name}}"
+                   placeholder="Display name"
+                   style="width:100%; box-sizing:border-box;"/>
+          </td>
+          <td style="padding-right:0.35em;">
+            <div style="display:flex; align-items:center; gap:0.4em;">
+              <input type="range" class="jhs-sb-volume" min="0" max="1" step="0.05"
+                     value="{{this.volume}}" style="flex:1 1 0; min-width:0;"/>
+              <span class="jhs-sb-volume-label" style="min-width:2.75em; text-align:right;">{{this.volumePercent}}%</span>
+            </div>
+          </td>
+          <td style="text-align:center;">
+            <input type="checkbox" class="jhs-sb-loop" {{#if this.loop}}checked{{/if}}/>
+          </td>
+          <td style="text-align:right;">
+            <button type="button" class="jhs-sb-delete" title="Remove row"
+                    style="width:28px; height:28px; padding:0; line-height:1;
+                           display:inline-flex; align-items:center; justify-content:center;
+                           color:#dc2626;">
+              <i class="fas fa-times"></i>
+            </button>
+          </td>
+        </tr>
+      {{/each}}
+    </tbody>
+  </table>
+
+  <div style="margin-top:0.5em; display:flex; justify-content:space-between; align-items:center;">
+    <button type="button" class="jhs-sb-add-row" style="padding:0.3em 0.9em;">
+      <i class="fas fa-plus"></i> Add Sound
+    </button>
+    <div style="opacity:0.7; font-size:0.85em;">Drop a macro anywhere on this dialog to edit it.</div>
+  </div>
+
+  <hr style="margin:0.75em 0;"/>
+  <div style="display:flex; justify-content:flex-end; gap:0.5em;">
+    <button type="button" class="jhs-sb-cancel" style="padding:0.35em 1em;">Close</button>
+    <button type="button" class="jhs-sb-generate" style="padding:0.35em 1em; font-weight:700;">
+      <i class="fas fa-cogs"></i> Generate Macro
+    </button>
+  </div>
+</form>
