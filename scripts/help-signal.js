@@ -137,7 +137,7 @@ const BAND_MATES = [
     defaultAnimation: "joetastic-help-signal.music_notations.blue",
     defaultHue: 0, defaultSaturate: 0, defaultBrightness: 0.2, defaultRainbow: false },
   { key: "enjee",   name: "Enjee",
-    defaultSound: "psfx.musical-instruments.drum",
+    defaultSound: "joetastic-help-signal.enjee",
     defaultAnimation: "joetastic-help-signal.music_notations.purple",
     defaultHue: 0, defaultSaturate: 1, defaultBrightness: 1, defaultRainbow: false },
   { key: "rico",    name: "Rico",
@@ -527,6 +527,15 @@ const HARDCODED_SOUND_ENTRIES = {
     kaldur8: `modules/${MODULE_ID}/Sounds/Kaldur/kaldur8.mp3`,
     kaldur9: `modules/${MODULE_ID}/Sounds/Kaldur/kaldur9.mp3`
   },
+  enjee: {
+    handdrum1: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-001.ogg`,
+    handdrum2: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-002.ogg`,
+    handdrum3: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-003.ogg`,
+    handdrum4: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-004.ogg`,
+    handdrum5: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-005.ogg`,
+    handdrum6: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-006.ogg`,
+    handdrum7: `modules/${MODULE_ID}/Sounds/Enjee/hand-drum-007.ogg`
+  },
   dreadie: {
     dreadie1:        `modules/${MODULE_ID}/Sounds/Dreadie/dreadie1.mp3`,
     dreadie2:        `modules/${MODULE_ID}/Sounds/Dreadie/Dreadie2.mp3`,
@@ -542,18 +551,32 @@ const HARDCODED_SOUND_ENTRIES = {
     dreadiealright:  `modules/${MODULE_ID}/Sounds/Dreadie/DreadieAlright.mp3`,
     dreadielong:     `modules/${MODULE_ID}/Sounds/Dreadie/DreadieLong.mp3`
   },
+  // Nested by song. Path examples:
+  //   joetastic-help-signal.rico                 → random across all songs
+  //   joetastic-help-signal.rico.kickstart       → random Kickstart clip
+  //   joetastic-help-signal.rico.panama          → random Panama clip
+  //   joetastic-help-signal.rico.photograph      → random Photograph clip
+  //   joetastic-help-signal.rico.welcometothejungle → random WelcomeToTheJungle
   rico: {
-    kickstart1:        `modules/${MODULE_ID}/Sounds/Rico/kickstart1.mp3`,
-    kickstart2:        `modules/${MODULE_ID}/Sounds/Rico/Kickstart2.mp3`,
-    kickstart3:        `modules/${MODULE_ID}/Sounds/Rico/Kickstart3.mp3`,
-    kickstart4:        `modules/${MODULE_ID}/Sounds/Rico/Kickstart4.mp3`,
-    panama:            `modules/${MODULE_ID}/Sounds/Rico/Panama.mp3`,
-    panama3:           `modules/${MODULE_ID}/Sounds/Rico/Panama3.mp3`,
-    photograph1:       `modules/${MODULE_ID}/Sounds/Rico/Photograph1.mp3`,
-    photograph2:       `modules/${MODULE_ID}/Sounds/Rico/Photograph2.mp3`,
-    welcometojungle1:  `modules/${MODULE_ID}/Sounds/Rico/Welcometojungle1.mp3`,
-    welcometojungle2:  `modules/${MODULE_ID}/Sounds/Rico/welcometojungle2.mp3`,
-    welcometojungle3:  `modules/${MODULE_ID}/Sounds/Rico/Welcometojungle3.mp3`
+    kickstart: {
+      kickstart1: `modules/${MODULE_ID}/Sounds/Rico/Kickstart/kickstart1.mp3`,
+      kickstart2: `modules/${MODULE_ID}/Sounds/Rico/Kickstart/Kickstart2.mp3`,
+      kickstart3: `modules/${MODULE_ID}/Sounds/Rico/Kickstart/Kickstart3.mp3`,
+      kickstart4: `modules/${MODULE_ID}/Sounds/Rico/Kickstart/Kickstart4.mp3`
+    },
+    panama: {
+      panama:  `modules/${MODULE_ID}/Sounds/Rico/Panama/Panama.mp3`,
+      panama3: `modules/${MODULE_ID}/Sounds/Rico/Panama/Panama3.mp3`
+    },
+    photograph: {
+      photograph1: `modules/${MODULE_ID}/Sounds/Rico/Photograph/Photograph1.mp3`,
+      photograph2: `modules/${MODULE_ID}/Sounds/Rico/Photograph/Photograph2.mp3`
+    },
+    welcometothejungle: {
+      welcometojungle1: `modules/${MODULE_ID}/Sounds/Rico/WelcomeToTheJungle/Welcometojungle1.mp3`,
+      welcometojungle2: `modules/${MODULE_ID}/Sounds/Rico/WelcomeToTheJungle/welcometojungle2.mp3`,
+      welcometojungle3: `modules/${MODULE_ID}/Sounds/Rico/WelcomeToTheJungle/Welcometojungle3.mp3`
+    }
   },
   scales: {
     riff1:     `modules/${MODULE_ID}/Sounds/Scales/riff1.mp3`,
