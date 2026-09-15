@@ -3142,8 +3142,10 @@ Hooks.once("ready", () => {
         console.error(`${MODULE_ID} | ensureItem(${variant.key}) threw:`, e);
       }
     }
-    try { await cleanupLegacyBandMateMacros(); }
-    catch (e) { console.error(`${MODULE_ID} | cleanupLegacyBandMateMacros threw:`, e); }
+    // No auto-cleanup of legacy band-mate macros — leftover per-mate macros
+    // from v1.4.x are safe to delete manually from the Macros sidebar. The
+    // cleanup helper is still exposed via api.cleanupLegacyBandMateMacros()
+    // for GMs who want to run it on demand from console.
 
     for (const user of game.users) {
       try {
@@ -3172,6 +3174,7 @@ Hooks.once("ready", () => {
     setUserSelectedMate,
     turnOffAllBandMates,
     openBandMateConfigDialog,
+    cleanupLegacyBandMateMacros,
     openSoundBoard,
     openSoundBoardFromData,
     openSoundBoardSetup,
