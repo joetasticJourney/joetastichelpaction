@@ -2,7 +2,7 @@
   "id": "joetastic-help-signal",
   "title": "Joetastic Help Signal",
   "description": "Visual/audio cues for the D&D 5e Help action plus a per-player 'Band Mate' toggle system. Three Help flavors — Help-Attack (advantage on attacks against target), Help-Save (disadvantage on target's next save), and Help-Ability (advantage on the next ability check). Band Mate lets each player pick from five named mates (Scales, Dreadie, Kaldur, Enjee, Rico), each with its own sound, animation, and color, that fire when the player casts a spell, uses Bardic Inspiration, or rolls a Performance check. Right-click a mate icon to configure sound / animation / hue / rainbow / triggers. Requires Sequencer; JB2A optional.",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "compatibility": {
     "minimum": "13",
     "verified": "13"

@@ -769,24 +769,6 @@ async function registerSounds() {
   } catch (e) {
     console.warn(`${MODULE_ID} | Sequencer.Database.registerEntries failed:`, e);
   }
-
-  // Preload only the apply-cue defaults on world load, since the apply cue
-  // fires immediately (no window to preload later). Attack/reminder/expire
-  // cues get preloaded per-effect via the createActiveEffect hook instead.
-  const applyDefaults = [entries.billandted, entries.ontokenbuff];
-  const preloadPaths = [];
-  const collect = (v) => {
-    if (typeof v === "string") preloadPaths.push(v);
-    else if (v && typeof v === "object") Object.values(v).forEach(collect);
-  };
-  applyDefaults.forEach(collect);
-  if (preloadPaths.length && Sequencer.Preloader) {
-    try {
-      await Sequencer.Preloader.preload(preloadPaths);
-    } catch (e) {
-      console.warn(`${MODULE_ID} | apply-cue preload failed:`, e);
-    }
-  }
 }
 
 // Create/refresh the per-variant macro. Idempotent: existing macros are
